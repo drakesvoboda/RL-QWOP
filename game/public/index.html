@@ -1,0 +1,594 @@
+<!DOCTYPE html
+    PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" dir="ltr" lang="en-US">
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=EmulateIE7" />
+    <meta charset="utf-8">
+    <meta name="viewport"
+        content="width=900, height=device-height, maximum-scale=1.0, minimum-scale=0.5, initial-scale=0.8, user-scalable=no" />
+    <title>QWOP</title>
+    <style type="text/css">
+        /* ------------------------------------------------------------------
+---------- BASE LAYOUT ----------------------------------------------
+------------------------------------------------------------------ */
+        html,
+        body {
+            display: block;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+            -webkit-tap-highlight-color: transparent;
+            /* For some Androids */
+
+        }
+
+        @-ms-viewport {
+            width: device-width;
+        }
+
+        body {
+            padding-left: 0;
+            padding-right: 0;
+            visibility: visible;
+            text-align: center;
+            /* centering the page container, 
+							text-align will be reset to left 
+							inside the container */
+            margin: 0;
+            font-family: verdana;
+            font-size: 13px;
+            line-height: 1.4;
+            color: #000000;
+            background: #ddd;
+            padding-top: 0px;
+            padding-bottom: 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+
+        }
+
+        a:link,
+        a:visited,
+        a:active {
+            color: #D40000;
+            font-weight: normal;
+            text-decoration: none;
+        }
+
+        a:hover {
+            color: #ED0000;
+            font-weight: normal;
+            text-decoration: underline;
+        }
+
+        table {
+            font-size: 1em;
+        }
+
+        #leftnav {
+            clear: right;
+            background-color: #dddddd;
+            display: inline-block;
+            z-index: 3;
+            float: left;
+            width: 160px;
+        }
+
+        #rightnav {
+            clear: left;
+            background-color: #dddddd;
+            margin-top: 0%;
+            z-index: 3;
+            float: right;
+            width: 160px;
+        }
+
+        #topnav {
+            background-position: center;
+            background-color: #ffffff;
+            text-align: center;
+            z-index: 3;
+            float: none;
+            width: 100%;
+            height: 90px;
+            margin-top: 0px;
+            margin-bottom: 33px;
+
+
+        }
+
+
+        /* ------------------------------------------------------------------
+---------- WRAPPER, CONTAINER & LAYOUT ------------------------------
+------------------------------------------------------------------ */
+
+
+        /*-------------------- WRAPPER for MIN / MAX width --------*/
+
+        div#wrapper {
+            width: 100%;
+            height: 1000px;
+            display: block;
+            margin: 0;
+            overflow: hidden;
+            text-align: center;
+            z-index: 3;
+        }
+
+
+        /*-------------------- CONTAINER for VISUAL styles --------*/
+
+        div#container {
+            width: 1080px;
+            height: 750px;
+            position: absolute;
+            margin-left: -540px;
+            margin-top: -375px;
+            top: 50%;
+            left: 50%;
+            display: block;
+            padding: 0px;
+            /*This effectively only affects top/bottom padding */
+            background: #fff;
+            box-shadow: 0 0 25px #333;
+            -webkit-box-shadow: 0 0 25px #333;
+            -moz-box-shadow: 0 0 25px #333;
+            padding-left: 0.001px;
+            padding-right: 0.001px;
+            text-align: center;
+            /* resetting the "text-align: center" of "wrapper" */
+
+        }
+
+        /*-------------------- LAYOUT to keep it all together -----*/
+
+        table#layout {
+            font-size: 100%;
+            width: 100%;
+            table-layout: relative;
+        }
+
+        .colone {}
+
+        .colone-inner {}
+
+        .coltwo {}
+
+        .colthree-inner {}
+
+        .colthree {}
+
+        /* ------------------------------------------------------------------
+---------- HEADER ---------------------------------------------------
+------------------------------------------------------------------ */
+        #gameContent {
+            padding: 0;
+            margin: 0;
+            background-color: #111111;
+            width: 640px;
+            height: 400px;
+        }
+
+        #window1 {
+            margin: 0;
+            padding: 0;
+        }
+
+        .post-body {
+            width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /*-------------------- HEADER CONTAINER -------------------*/
+
+        td#header {
+            width: auto;
+            padding: 0;
+        }
+
+
+        /*-------------------- LOGO AREA --------------------------*/
+
+        table#logoarea,
+        table#logoarea tr,
+        table#logoarea td {
+            margin: 0;
+            padding: 0;
+            background: none;
+            border: 0;
+        }
+
+        table#logoarea {
+            width: 100%;
+            border-spacing: 0px;
+            border: solid 1px;
+        }
+
+        /*-------------------- LOGO -------------------------------*/
+
+        img.logo {
+            display: block;
+            margin: 0 0px 0 0;
+        }
+
+        td.logoarea-logo {
+            width: 1%;
+        }
+
+
+        /*-------------------- BLOG TITLE -------------------------*/
+
+        h1.blogtitle,
+        h2.blogtitle {
+            text-align: left;
+            display: block;
+            margin: 0;
+            padding: 0;
+            letter-spacing: 2px;
+            line-height: 1.0em;
+            font-size: 120%;
+            text-transform: uppercase;
+            font-smooth: always;
+        }
+
+        h1.blogtitle a:link,
+        h1.blogtitle a:visited,
+        h1.blogtitle a:active,
+        h2.blogtitle a:link,
+        h2.blogtitle a:visited,
+        h2.blogtitle a:active {
+            text-decoration: none;
+            color: #FFFFFF;
+            font-weight: normal;
+            font-smooth: always;
+        }
+
+        h1.blogtitle a:hover,
+        h2.blogtitle a:hover {
+            text-decoration: none;
+            color: #AC161B;
+            font-weight: normal;
+        }
+
+        /*-------------------- BLOG TAGLINE -----------------------*/
+
+
+
+
+        div.header-image-container {
+            position: relative;
+            margin: 0;
+            padding: 0;
+            height: 30px;
+        }
+
+        div.titleoverlay {
+            z-index: 4;
+            position: relative;
+            float: left;
+            width: auto;
+            margin-top: 7px;
+            margin-left: 14px;
+            border: solid 0px;
+        }
+
+
+
+
+        /*-------------------- CLICKABLE HEADER IMAGE -------------*/
+
+        div.clickable {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 3;
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 30px;
+        }
+
+        a.divclick:link,
+        a.divclick:visited,
+        a.divclick:active,
+        a.divclick:hover {
+            width: 100%;
+            height: 100%;
+            display: block;
+            text-decoration: none;
+        }
+
+
+        /* ------------------------------------------------------------------
+---------- FOOTER ---------------------------------------------------
+------------------------------------------------------------------ */
+
+        td#footer {
+            width: 100%;
+            background-color: #dddddd;
+            border-top: solid 0px #eee;
+            padding: 00px;
+            text-align: center;
+            color: #888;
+            font-size: 11px;
+        }
+
+        td#footer a:link,
+        td#footer a:visited,
+        td#footer a:active {
+            text-decoration: none;
+            color: #777777;
+            font-weight: normal;
+        }
+
+        td#footer a:hover {
+            text-decoration: none;
+            color: #777777;
+            font-weight: normal;
+        }
+
+
+
+        /*-------------------- POST CONTAINER ---------------------*/
+        div.post,
+        div.page {
+            display: block;
+            margin: 0px 0px 0px 0px;
+            border-top: solid 0px #eee;
+            padding-top: 00px;
+        }
+
+        /*-------------------- POST HEADLINE ----------------------*/
+
+        div.post-headline {}
+
+        div.post-headline h1,
+        div.post-headline h2 {
+            margin: 0;
+            padding: 0;
+            padding: 0;
+            margin: 0;
+            font-size: 1.2em;
+        }
+
+        div.post-headline h2 a:link,
+        div.post-headline h2 a:visited,
+        div.post-headline h2 a:active,
+        div.post-headline h1 a:link,
+        div.post-headline h1 a:visited,
+        div.post-headline h1 a:active {
+            font-size: 1.2em;
+        }
+
+        div.post-headline h2 a:hover,
+        div.post-headline h1 a:hover {}
+    </style>
+
+    <script type="text/javascript" src="./lib/howler.js"></script>
+    <script type="text/javascript" src="./ws.js"></script>
+    <script type="text/javascript" src="./scripts/swfobject.js"></script>
+    <script type="text/javascript">
+
+        var refreshIntervalId;
+        var windowWidth;
+
+        function getParameterByName(name) {
+            var match = RegExp('[?&]' + name + '=([^&]*)').exec(window.location.search);
+            return match && decodeURIComponent(match[1].replace(/\+/g, ' '));
+        }
+
+
+        window.onload = function () {
+
+            var playerVersion = swfobject.getFlashPlayerVersion();
+            var container = document.getElementById('gameContent');
+            //this is the rubbish we have to deal with to make stuff work on mobile browsers, ugh. I hate you.
+            if (document.addEventListener) {
+                document.addEventListener('touchmove', function (e) {
+                    e.preventDefault();
+                }, false);
+
+                if ((playerVersion.major > 9) && (!webgl)) { }
+                else {
+                    document.documentElement.addEventListener('keydown', function (e) {
+                        if ((e.keycode || e.which) == 32) {
+                            e.preventDefault();
+                        }
+                    }, false);
+                }
+
+            }
+            else if (document.attachEvent) {
+                document.attachEvent('touchmove', function (e) {
+                    e.preventDefault();
+                }, false);
+                if ((playerVersion.major > 9) && (!webgl)) { }
+                else {
+                    document.attachEvent('keydown', function (e) {
+                        if ((e.keycode || e.which) == 32) {
+                            e.preventDefault();
+                        }
+                    }, false);
+                }
+            }
+
+            var updateLayout = function () {
+                var viewport = document.querySelector("meta[name=viewport]");
+
+                if (windowWidth != window.screen.width) {
+                    var initialScale = Math.min(window.innerWidth / 800.0, window.innerHeight / 640.0)
+                    if (/Android|webOS|BlackBerry|IEMobile|Opera Mini|Silk/i.test(navigator.userAgent)) {
+                        viewport.setAttribute('content', "width=640, height=480, maximum-scale=1.5, minimum-scale=0.25, user-scalable=no, initial-scale=" + initialScale);
+                    }
+                    else if (/iPhone|iPod/i.test(navigator.userAgent)) {
+                        viewport.setAttribute('content', "width=640, height=480, maximum-scale=1.0, minimum-scale=0.25, user-scalable=no, initial-scale=" + initialScale);
+                    }
+                    else if (/iPad/i.test(navigator.userAgent)) {
+                        viewport.setAttribute('content', "width=640, height=480, maximum-scale=1.0, minimum-scale=0.25, user-scalable=no, initial-scale=" + initialScale);
+                    }
+                    window.scrollTo(0, 0);
+                    windowWidth = window.screen.width;
+                }
+            }
+            //setInterval(updateLayout, 400);
+            var webgl = getParameterByName("webgl");
+            if ((playerVersion.major >= 9) && (!webgl)) {
+                swfobject.embedSWF(
+                    "athletics.swf", "gameContent",
+                    "640", "400", "9.0.24"
+                );
+            }
+            else {
+                var gamejs = document.createElement('script');
+                gamejs.type = 'text/javascript';
+                gamejs.src = "./QWOP.min.js";
+                container.appendChild(gamejs);
+            }
+
+        };
+
+
+    </script>
+</head>
+<meta name="keywords"
+    content="game, games, arcade, flash games, online games, addicting, addictive, flash, fun, athletics, olympics, video game">
+<meta name="description" content="Athletics Game">
+
+<body>
+    <div id="wrapper">
+
+        <div id="container">
+            <table id="layout" border="0" cellspacing="0" cellpadding="0">
+                <colgroup>
+                    <col class="colthree" />
+
+                </colgroup>
+                <tr>
+                    <!-- Header -->
+                    <td id="header" colspan="3">
+
+                        <div id="imagecontainer" class="header-image-container"
+                            style="background: url('./shade.png') top center no-repeat;">
+                            <div class="clickable"><a class="divclick" title="Foddy.net"
+                                    href="http://foddy.net/">&nbsp;</a></div>
+                            <div class="titleoverlay">
+                                <h2 class="blogtitle"><a href="http://foddy.net/">Foddy.net</a></h2>
+                            </div>
+                        </div>
+
+                    </td>
+
+                </tr>
+
+                <tr id="bodyrow">
+
+                    </td>
+
+                </tr>
+                <!-- / Main Body -->
+                <td id="left">
+                    <div id="leftnav">
+
+                        <script type="text/javascript">
+                            google_ad_client = "ca-pub-8783609410325228";
+                            google_ad_slot = "3526701198";
+                            google_ad_width = 160;
+                            google_ad_height = 600;
+                        </script>
+                        <!-- Wide side banner left -->
+                        <script type="text/javascript" src="//pagead2.googlesyndication.com/pagead/show_ads.js">
+                        </script>
+
+                    </div>
+                </td>
+
+                <td id="middle">
+
+                    <div
+                        class="category-flash category-games tag-athletics-game tag-flash-games tag-free-game tag-game tag-online-game tag-qwop">
+
+                        <div id="topnav" align="top">
+                            <script type="text/javascript">
+                                google_ad_client = "ca-pub-8783609410325228";
+                                google_ad_slot = "6480167599";
+                                google_ad_width = 728;
+                                google_ad_height = 90;
+                            </script>
+                            <!-- Leaderboard -->
+                            <script type="text/javascript" src="//pagead2.googlesyndication.com/pagead/show_ads.js">
+                            </script>
+                        </div>
+
+                        <div class="post-headline">
+                            <h1>QWOP</h1>
+                        </div>
+
+                        <div class="post-body">
+
+                            <div id="gameContent"></div>
+
+                            <p>This page now supports mobile browsers - kind of!</br> Click <a
+                                    href="http://foddy.net/Athletics.html?webgl=true">here</a> to force the HTML5
+                                version to load. Or buy QWOP for <a
+                                    href="https://play.google.com/store/apps/details?id=com.noodlecake.QWOP">Android</a>
+                                or <a href="http://qwop.foddy.net">iOS</a>! !<br>Follow <a
+                                    href="https://twitter.com/bfod">@bfod</a> on Twitter</p>
+
+                        </div>
+                    </div>
+                <td id="right">
+                    <div id="rightnav">
+                        <script type="text/javascript">
+                            google_ad_client = "ca-pub-8783609410325228";
+                            google_ad_slot = "5003434392";
+                            google_ad_width = 160;
+                            google_ad_height = 600;
+                        </script>
+                        <!-- Wide side banner right -->
+                        <script type="text/javascript" src="//pagead2.googlesyndication.com/pagead/show_ads.js">
+                        </script>
+                    </div>
+                </td>
+
+                <tr>
+
+            </table><!-- / layout -->
+            <table id="footer" border="0" cellspacing="0" cellpadding="0" width="100%">
+                <td id="footer" colspan="3">
+
+                    <p>
+                        Copyright &copy; 2008-2015 <a href="http://foddy.net/">Foddy.net</a> - All Rights Reserved</p>
+        </div>
+        </table>
+    </div><!-- / container -->
+    </div><!-- / wrapper -->
+
+
+
+
+    <script type="text/javascript">
+
+        var _gaq = _gaq || [];
+        _gaq.push(['_setAccount', 'UA-15559835-1']);
+        _gaq.push(['_trackPageview']);
+
+        (function () {
+            var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+            ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+            var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+        })();
+
+    </script>
+
+<div id="terminal"></div>
+<div id="score"></div>
+</body>
+
+</html>
