@@ -10,13 +10,12 @@ import json
 import signal
 import atexit
 
+import os
+import io
+import math
 import cv2
 import base64
-import io
-
 import numpy as np
-
-import math
 
 def base642numpy(obs):
     im_bytes = base64.b64decode(obs)
@@ -27,9 +26,11 @@ def base642numpy(obs):
 
     return img.astype(float) / 255
 
-class Environment:
+class QWOPEnvironment:
     def __init__(self):
-        self.driver = webdriver.Firefox(executable_path = './firefox-driver/geckodriver')
+        dirname = os.path.dirname(__file__)
+        filename = os.path.join(dirname, './firefox-driver/geckodriver')
+        self.driver = webdriver.Firefox(executable_path=filename)
 
         signal.signal(signal.SIGINT, self.quit)
         signal.signal(signal.SIGTERM, self.quit)
@@ -55,6 +56,14 @@ class Environment:
         self.velocity = 0
 
         self.last_obs = None
+
+    @property
+    def obs_dim(self):
+        return (3, 32, 64)
+
+    @property   
+    def act_dim(self):
+        return 4
 
     def quit(self):
         self.driver.quit()

@@ -1,6 +1,7 @@
-from Environment import Environment
-from ppo.CNNActorCritic import CNNActorCritic
-from ppo.ppo import ppo
+from RLQWOP.QWOPEnvironment import QWOPEnvironment
+from RLQWOP.CNNActorCritic import CNNActorCritic
+from RLQWOP.ModelParallelPPO import ppo
+
 from spinup.utils.mpi_tools import mpi_fork
 
 if __name__ == '__main__':
@@ -20,6 +21,6 @@ if __name__ == '__main__':
     from spinup.utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs('PPO', args.seed)
 
-    ppo(Environment, actor_critic=CNNActorCritic, gamma=args.gamma,
+    ppo(QWOPEnvironment, actor_critic=CNNActorCritic, gamma=args.gamma,
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
         logger_kwargs=logger_kwargs, pi_lr=1e-6, vf_lr=1e-4, target_kl=0.05, train_pi_iters=80, train_v_iters=80)

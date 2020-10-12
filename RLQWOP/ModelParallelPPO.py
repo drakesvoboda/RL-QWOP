@@ -1,19 +1,21 @@
+
+
+import time
+from functools import reduce
 import numpy as np
+from mpi4py import MPI
+from tqdm import tqdm, trange
+
 import torch
 from torch.optim import Adam
-
 from torch.utils.data import Dataset, DataLoader, RandomSampler
 
 import gym
-import time
 import spinup.algos.pytorch.ppo.core as core
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
-from tqdm import tqdm, trange
-
-from mpi4py import MPI
 
 class BufferDataset(Dataset):
     def __init__(self, data):
@@ -188,7 +190,7 @@ class PPOBuffer:
         size = self.max_size * num_procs
         offsets = np.arange(0, size, self.max_size)
 
-        flat_obs = self.obs_dim[0] * self.obs_dim[1] * self.obs_dim[2]
+        flat_obs = reduce(lambda a,b: a*b, self.obs_dim)
         
         obs_buf  = np.zeros(size * flat_obs, dtype=np.float32)
         act_buf  = np.zeros(size * self.act_dim, dtype=np.float32)
@@ -343,6 +345,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
     # Instantiate environment
     env = env_fn()
 
+    obs_dim = env.obs_dim
+    act_dim = env.act_dim
+
     # Create actor-critic module
     ac = actor_critic()
 
@@ -355,7 +360,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
 
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer((3, 32, 64), 4, local_steps_per_epoch, gamma, lam)
+    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
     # Set up function for computing PPO policy loss
     def compute_loss_pi(data):
@@ -435,44 +440,45 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
-        for t in range(local_steps_per_epoch):
-            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
+        with torch.no_grad():
+            for t in range(local_steps_per_epoch):
+                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
 
-            next_o, r, d, pos = env.step(a)
-            ep_ret += r
-            ep_len += 1
+                next_o, r, d, pos = env.step(a)
+                ep_ret += r
+                ep_len += 1
 
-            if pos > best_pos: 
-                best_pos = pos
-                new_best = True
+                if pos > best_pos: 
+                    best_pos = pos
+                    new_best = True
 
-            # save and log
-            buf.store(o, a, r, v, logp)
-            logger.store(VVals=v)
+                # save and log
+                buf.store(o, a, r, v, logp)
+                logger.store(VVals=v)
 
-            # Update obs (critical!)
-            o = next_o
+                # Update obs (critical!)
+                o = next_o
 
-            timeout = ep_len == max_ep_len
-            terminal = d or timeout
-            epoch_ended = t == local_steps_per_epoch-1
+                timeout = ep_len == max_ep_len
+                terminal = d or timeout
+                epoch_ended = t == local_steps_per_epoch-1
 
-            time.sleep(0.05)
+                time.sleep(0.05)
 
-            if terminal or epoch_ended:
-                if epoch_ended and not(terminal):
-                    print('Warning: trajectory cut off by epoch at %d steps.' %
-                          ep_len, flush=True)
-                # if trajectory didn't reach terminal state, bootstrap value target
-                if timeout or epoch_ended:
-                    _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
-                else:
-                    v = 0
-                buf.finish_path(v)
-                if terminal:
-                    # only save EpRet / EpLen if trajectory finished
-                    logger.store(EpRet=ep_ret, EpLen=ep_len)
-                o, ep_ret, ep_len = env.reset(), 0, 0
+                if terminal or epoch_ended:
+                    if epoch_ended and not(terminal):
+                        print('Warning: trajectory cut off by epoch at %d steps.' %
+                            ep_len, flush=True)
+                    # if trajectory didn't reach terminal state, bootstrap value target
+                    if timeout or epoch_ended:
+                        _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                    else:
+                        v = 0
+                    buf.finish_path(v)
+                    if terminal:
+                        # only save EpRet / EpLen if trajectory finished
+                        logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    o, ep_ret, ep_len = env.reset(), 0, 0
 
         if new_best: print(f"NEW BEST: {best_pos}")
         new_best = False
@@ -508,28 +514,3 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
         # logger.log_tabular('StopIter', average_only=True)
         # logger.log_tabular('Time', time.time()-start_time)
         # logger.dump_tabular()
-
-
-if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='HalfCheetah-v2')
-    parser.add_argument('--hid', type=int, default=64)
-    parser.add_argument('--l', type=int, default=2)
-    parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--cpu', type=int, default=2)
-    parser.add_argument('--steps', type=int, default=4000)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='ppo')
-    args = parser.parse_args()
-
-    mpi_fork(args.cpu)  # run parallel code with mpi
-
-    from spinup.utils.run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
-
-    ppo(lambda: gym.make(args.env), actor_critic=core.MLPActorCritic,
-        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l), gamma=args.gamma,
-        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-        logger_kwargs=logger_kwargs)
