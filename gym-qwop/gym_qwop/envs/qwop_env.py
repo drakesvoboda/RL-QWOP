@@ -96,13 +96,13 @@ class QWOPEnv(gym.Env):
         return state
 
     def compute_reward(self, state=None):
+        curr_time = time.time()
         state = state if state != None else self.get_state()
-        reward = (3*state["diffx"])**2 if state["diffx"] > 0 else 0
+        reward = state["diffx"] / (curr_time - self.last_reward)
 
-        # angle = state["torso"] + (math.pi / 2)
-        # if abs(angle) > (math.pi / 2): reward -= abs(angle)
+        reward = -1 if state["terminal"] else reward
 
-        reward = -0.5 if state["terminal"] else reward
+        self.last_reward = time.time()
 
         return reward
 
@@ -167,6 +167,8 @@ class QWOPEnv(gym.Env):
         ActionChains(self.driver).key_up('p').key_up('o').key_up('w').key_up('q').key_down('r').key_up('r').perform()
 
         time.sleep(0.03)
+
+        self.last_reward = time.time()
 
         state = self.get_state()
 
