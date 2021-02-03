@@ -7,7 +7,7 @@ from stable_baselines import PPO2
 
 env = make_vec_env('gym_qwop:qwop-v0', n_envs=4)
 model = PPO2(MlpLstmPolicy, env, verbose=1)
-model.load("ppo2_qwop")
+model.load("ppo2_qwop-v0")
 
 obs = env.reset()
 while True:

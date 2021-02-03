@@ -1,32 +1,18 @@
-# QWOP AI - Reinforcement learning.
+# RL QWOP
 
-Have you watched [Mike Boyd’s](https://www.youtube.com/user/microboyd) channel on youtube?. Mike, as he likes to put it, is an average guy that tries 
-to learn skills like juggling, stacking dice, and others while recording himself until he /
-masters the task at hand. On one of this challenges, he tries to learn QWOP (http://www.foddy.net/Athletics.html) 
-a game (writen by Bennett Foddy) in which there are four input buttons Q,W,O,P that control tighs and calves of an infuriating
-runner on a 100 meter track. As simple as it might seem, reaching the 100 meter mark took Mike approximately 8 hours.
+Forked from [here](https://github.com/juanto121/qwop-ai).
 
-Inspired by this video, the following is an attempt to code an agent using reinforcement learning that reaches consistently the 100 meter mark with under 8 hours of training.
+A friend of mine is really good at the video game QWOP. 
+It's a really hard game where you control a sprinters legs 
+to run a 100 meter dash: you can [try it out yourself](http://www.foddy.net/Athletics.html). 
+I'm not very good at the game, but I wanted to beat my friend, so I trained a computer to beat the game for me.
 
-Before we dig into the approach, here’s what I found to be the most useful writeup about getting started with reinforcement learning and an example of what is used in this project.
 
-http://karpathy.github.io/2016/05/31/rl/
+## QWOP Environment
 
-And a lecture about it here: https://www.youtube.com/watch?v=tqrcjHuNdmQ
-
-Besides that here this are some useful resources to get started with RL.
-
-- https://spinningup.openai.com/en/latest/
- 
-
-### Game environment setup
-
-As usual, some leg work is required in order to have a runnable environment. The first thing is figuring out a way to run the game reliably
-without the need to make requests to the official site that hosts the game. Unfortunately, I found no way of getting the javascript code 
-that runs the game (read: I didn't try hard enough), and instead had to cope with the flash player version.
-The .swf (flash format) can be embedded in a browser testing environment, like selenium, after setting some obscure chrome flags that enable playing flash multimedia.
-
-To run the game in a local server:
+I modified the internals of QWOP so that it can be run as a gym environment. Agents can send key commands to the game and 
+observe the state of the game, how far the runner has run, and if the game has been completed.
+The game is hosted in a local node server. To get it running, run the following:
 
 ```
 cd game
@@ -34,77 +20,20 @@ npm i
 node server
 ```
 
-With the game running on demand and with less delay, the environment should have the ability to return at least,
-and as is usual in [openAIs gym](https://gym.openai.com/) environments, an observation, a score, and a way to determine if the current game 
-has reached an end state. Obtaining the observation, that is, the raw pixels of the current frame of the game can be accomplished in several
-ways such as using the native selenium take_screenshot which turns out to be extremely slow, in the order of 1.6 ms between each frame 
-(less than a frame per second), consider that 60 FPS is approximately 0.016 ms between each frame. 
-After discarding this method, taking a screenshot using the [mss](https://pypi.org/project/mss/) library seems to be the more sensible choice.
-The only issue is that I had to hard code the position of the game in my screen hence ruining the ability to reliably reproducing the code 
-without this parameter being tweaked. With mss taking the screenshot, frames were taken every ~0.006s (166 FPS!!).
+The `./gym-qwop` folder has python classes modeling QWOP as an [open-ai gym](https://gym.openai.com/) environment.
+There are three versions of the environment: `qwop-v0`, `frame-qwop-v0`, and `multi-frame-qwop-v0`.
+Run `pip install ./gym-qwop/` to install the gym environment.
 
-Reinforcement learning is all about rewards, rewards are based on the game scoring system, in the QWOP case the distance score should somehow be related to distance and if possible time and running style.
-In order to get the score in this setup, pixel data on top of the screen (see picture 1) must be interpreted as text. There are multiple ways of achieving this, for instance training another neural net
-to overfit score image data. It sounded like a fancy option until I realized that it would be no different than comparing each pixel of every attainable score with a very nasty for loop 😒.
-What I did instead was to use the [pytesseract](https://pypi.org/project/pytesseract/) library that implements OCR.
+The default environment (`qwop-v0`) returns observations representing the position and angle of each of the runners limbs.
+`frame-qwop-v0` returns observations as the pixel data of the current frame of the game. `multi-frame-qwop-v0` also the previous three frames as observations.
+
+Since we have modeled the environment as a gym environment, we can use openai's implementation of many popular RL algorithms.
+
+Running `python run-gym.py` will train a model using one of openai's algorithms.
 
 
-![score_highlight](https://raw.githubusercontent.com/juanto121/qwop-ai/master/agent/assets/highlighted_score.png)
+## PPO
 
-Doing OCR with Tesseract also implied some bit of pre processing. Long story short, I needed an image with at least 300dpi and also that the image to be
-processed had to have black characters with a white background. This last thing showed to be extremely important for Tesseract, here's a [comparisson](https://youtu.be/wfzLy0zuoJQ).
+The `./RLQWOP` directory contains a customized implementation of the proximal policy optimization algorithm. My implementation borrows much from [openai's spinning up implementation of PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html#) with a modified strategy to paralellize training.
 
-Detecting when the game has reached an end state was as simple as recognizing the end score screen, for this, a simple comparison of 16 indexes did the job.
-
-To run the agent with random actions use:
-
-```
-cd agent
-pip install requirements.txt
-python3 RandomRunner.py
-```
-
-![score_highlight](https://raw.githubusercontent.com/juanto121/qwop-ai/master/agent/assets/random_runner.gif)
-
-### RL Approach 0 - Vainilla policy gradients
-
-Once the game environment was stable enough, the approach was to implement a 1 layer policy network to start tuning hyperparameters.
-
-The output was a softmax function with 5 outputs encoding the regular Q,W,O,P and the "do nothing" action.
-
-The results were not satisfactory, it samples the policy correctly but improvements do not capture efficient running mechanics.
-
-
-Hyper params used:
-
-|       Parameter | Value|
-|--------------------|-------|
-| hidden layer units | 200   |
-| gamma              |  0.99 |
-|learning rate| 1e-3|
-
-
-Knee scraping policy:
-
-![score_highlight](https://raw.githubusercontent.com/juanto121/qwop-ai/master/agent/assets/pg_runner.gif)
-
-Although the output of the training was not what I expected, in comparison to other attempts to automate QWOP, the knee scraping pose is a common factor.
-
-For reference, here are some other projects with the same goal that ended up learning similar mechanics.
-
-Genetic algorithms:
-
-[Evolving QWOP Gaits](https://ai.google/research/pubs/pub42902) 
-- Uses QWOP direct interaction instead of a model
-- Explains the knee scraping pose as a stability gene
-
-[Stanford CS229 Project: QWOP Learning](http://cs229.stanford.edu/proj2012/BrodmanVoldstad-QWOPLearning.pdf)
-- Models QWOP with their own ragdoll physics engine
-- Uses value iteration to improve base on rewards
-   
-There are plenty of issues that can produce this kind of outcome for instance sparse rewards or insufficient input representation.
-
-## Open AI baselines - PPO and walkers
-...
-# RL-QWOP
-# RL-QWOP
+In my implementation, several actor processes maintain their own copy of the model and gather experiences from the environment. Each actor adds their experiences to a shared replay buffer. A single learner process does gradient updates from the experiences stored in the replay buffer. After updating the model, the learner distributes the model's parameters back to the actor processes.

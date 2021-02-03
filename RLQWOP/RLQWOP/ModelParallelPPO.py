@@ -12,6 +12,9 @@ from torch.utils.data import Dataset, DataLoader, RandomSampler
 
 import gym
 import spinup.algos.pytorch.ppo.core as core
+
+from RLQWOP.MLPActorCritic import MLPActorCritic
+
 from spinup.utils.logx import EpochLogger
 from spinup.utils.mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
@@ -76,6 +79,7 @@ def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, targ
             obs, act, adv, logp_old = obs.cuda(), act.cuda(), adv.cuda(), logp_old.cuda()
 
             pi, logp = ac.pi(obs, act)
+
             pi_loss, pi_info = actor_loss(pi, adv, logp, logp_old, clip_ratio)
 
             kl_sum += (logp_old - logp).sum().item()
@@ -220,7 +224,7 @@ class PPOBuffer:
         return data
 
 
-def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
+def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
@@ -345,11 +349,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
     # Instantiate environment
     env = env_fn()
 
-    obs_dim = env.obs_dim
-    act_dim = env.act_dim
+    obs_dim = env.observation_space.shape
+    act_dim = env.action_space.shape[0]
 
     # Create actor-critic module
-    ac = actor_critic()
+    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
 
     # Sync params across processes
     sync_params(ac)
@@ -362,30 +366,6 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
     local_steps_per_epoch = int(steps_per_epoch / num_procs())
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
-    # Set up function for computing PPO policy loss
-    def compute_loss_pi(data):
-        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
-
-        # Policy loss
-        pi, logp = ac.pi(obs, act)
-        ratio = torch.exp(logp - logp_old)
-        clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
-        loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
-
-        # Useful extra info
-        approx_kl = (logp_old - logp).mean().item()
-        ent = pi.entropy().mean().item()
-        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
-        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
-
-        return loss_pi, pi_info
-
-    # Set up function for computing value loss
-    def compute_loss_v(data):
-        obs, ret = data['obs'], data['ret']
-        return ((ac.v(obs) - ret)**2).mean()
-
     # Set up optimizers for policy and value function
     pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
     vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
@@ -393,64 +373,21 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
-    def update():
-        data = buf.get()
-
-        pi_l_old, pi_info_old = compute_loss_pi(data)
-        pi_l_old = pi_l_old.item()
-        v_l_old = compute_loss_v(data).item()
-
-        # Train policy with multiple steps of gradient descent
-        for i in range(train_pi_iters):
-            pi_optimizer.zero_grad()
-            loss_pi, pi_info = compute_loss_pi(data)
-            kl = mpi_avg(pi_info['kl'])
-            if kl > 1.5 * target_kl:
-                logger.log(
-                    'Early stopping at step %d due to reaching max kl.' % i)
-                break
-            loss_pi.backward()
-            mpi_avg_grads(ac.pi)    # average grads across MPI processes
-            pi_optimizer.step()
-
-        logger.store(StopIter=i)
-
-        # Value function learning
-        for i in range(train_v_iters):
-            vf_optimizer.zero_grad()
-            loss_v = compute_loss_v(data)
-            loss_v.backward()
-            mpi_avg_grads(ac.v)    # average grads across MPI processes
-            vf_optimizer.step()
-
-        # Log changes from update
-        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-        logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                     KL=kl, Entropy=ent, ClipFrac=cf,
-                     DeltaLossPi=(loss_pi.item() - pi_l_old),
-                     DeltaLossV=(loss_v.item() - v_l_old))
-
-        sync_params(ac)
-
     # Prepare for interaction with environment
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
-
-    best_pos, new_best = 0, False
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         with torch.no_grad():
             for t in range(local_steps_per_epoch):
-                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
 
-                next_o, r, d, pos = env.step(a)
+                a = a.squeeze()
+
+                next_o, r, d, _ = env.step(a)
                 ep_ret += r
                 ep_len += 1
-
-                if pos > best_pos: 
-                    best_pos = pos
-                    new_best = True
 
                 # save and log
                 buf.store(o, a, r, v, logp)
@@ -471,7 +408,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
                             ep_len, flush=True)
                     # if trajectory didn't reach terminal state, bootstrap value target
                     if timeout or epoch_ended:
-                        _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32))
+                        _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
                     else:
                         v = 0
                     buf.finish_path(v)
@@ -480,15 +417,9 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
                         logger.store(EpRet=ep_ret, EpLen=ep_len)
                     o, ep_ret, ep_len = env.reset(), 0, 0
 
-        if new_best: print(f"NEW BEST: {best_pos}")
-        new_best = False
-
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
-
-        # Perform PPO update!
-        # update()
 
         data = buf.mpi_gather()
 
@@ -499,11 +430,11 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
         sync_params(ac)
 
         # Log info about epoch
-        # logger.log_tabular('Epoch', epoch)
-        # logger.log_tabular('EpRet', with_min_and_max=True)
-        # logger.log_tabular('EpLen', average_only=True)
-        # logger.log_tabular('VVals', with_min_and_max=True)
-        # logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
+        logger.log_tabular('Epoch', epoch)
+        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('VVals', with_min_and_max=True)
+        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
         # logger.log_tabular('LossPi', average_only=True)
         # logger.log_tabular('LossV', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
@@ -512,5 +443,5 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, seed=0,
         # logger.log_tabular('KL', average_only=True)
         # logger.log_tabular('ClipFrac', average_only=True)
         # logger.log_tabular('StopIter', average_only=True)
-        # logger.log_tabular('Time', time.time()-start_time)
-        # logger.dump_tabular()
+        logger.log_tabular('Time', time.time()-start_time)
+        logger.dump_tabular()

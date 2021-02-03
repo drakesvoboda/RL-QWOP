@@ -10,5 +10,5 @@ env = make_vec_env('gym_qwop:qwop-v0', n_envs=4)
 model = PPO2(MlpLstmPolicy, env, verbose=1, gamma=0.99)
 model.learn(total_timesteps=500000)
 
-model.save("ppo2_qwop")
+model.save("ppo2_qwop-v0")
 
