@@ -31,16 +31,15 @@ There are three versions of the environment: `qwop-v0`, `frame-qwop-v0`, and `mu
 Run `pip install ./gym-qwop/` to install the gym environment.
 
 The default environment (`qwop-v0`) returns observations representing the position and angle of each of the runners limbs.
-`frame-qwop-v0` returns observations as the pixel data of the current frame of the game. `multi-frame-qwop-v0` also the previous three frames as observations.
+`frame-qwop-v0` returns observations as the pixel data of the current frame of the game. `multi-frame-qwop-v0` uses three sequential frames as the observation.
 
-Since we have modeled the environment as a gym environment, we can use openai's implementation of many popular RL algorithms.
-
-Running `python run-gym.py` will train a model using one of openai's algorithms.
+Since we have implemented the environment as a gym environment, we can use existing implementations of many popular RL algorithms to train an agent.
+Running `python run-gym.py` will train a model using one of openai's implementations.
 
 
 ## Proximal Policy Optimization
 
-The `./RLQWOP` directory contains a customized implementation of the proximal policy optimization algorithm. My implementation borrows much from [openai's spinning up implementation of PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html#) with a modified strategy to parallelize training using OpenMPI.
+The `./RLQWOP` directory contains a custom implementation of the proximal policy optimization algorithm. My implementation borrows much from [openai's spinning up implementation of PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html#) with a modified strategy to parallelize training using OpenMPI.
 
 In my implementation, several actor processes maintain their own copy of the model and gather experiences from a locally simulated environment. Each actor adds their experiences to a shared replay buffer. A single learner process does gradient updates from the experiences stored in the replay buffer. After updating the model, the learner distributes the model's parameters back to each actor.
 
