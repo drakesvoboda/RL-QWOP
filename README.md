@@ -1,14 +1,12 @@
 # RL QWOP
 
-
-![RL QWOP](https://drakesvoboda.com/public/images/RLQWOP.png)
+<img src="https://drakesvoboda.com/public/images/RLQWOP.png" alt="drawing" width="800"/>
 
 Forked from [here](https://github.com/juanto121/qwop-ai).
 
-A friend of mine is really good at the video game QWOP. 
-It's a really hard game where you control a sprinters legs 
+A friend of mine is really good at the video game QWOP where you control a sprinters legs 
 to run a 100 meter dash: you can [try it out yourself](http://www.foddy.net/Athletics.html). 
-I'm not very good at the game, but I wanted to beat my friend, so I trained a computer to beat the game for me.
+I'm not very good at the game, but I wanted to beat my friend, so I trained a computer to beat the game for me using a reinforcement learning algorithm called proximal policy optimization.
 
 Requirements 
 
@@ -19,8 +17,8 @@ Requirements
 
 ## QWOP Environment
 
-I modified the internals of QWOP so that it can be run as a gym environment. Agents can send key commands to the game and 
-observe the state of the game, how far the runner has run, and if the game has been completed.
+I modified the internals of QWOP so that it can be run as a gym environment. 
+Agents can send key commands to the game, observe the state of the game, and are rewarded by the runner's velocity.
 The game is hosted in a local node server. To get it running, run the following:
 
 ```
@@ -33,8 +31,8 @@ The `./gym-qwop` folder has python classes modeling QWOP as an [open-ai gym](htt
 There are three versions of the environment: `qwop-v0`, `frame-qwop-v0`, and `multi-frame-qwop-v0`.
 Run `pip install ./gym-qwop/` to install the gym environment.
 
-The default environment (`qwop-v0`) returns observations representing the position and angle of each of the runners limbs.
-`frame-qwop-v0` returns observations as the pixel data of the current frame of the game. `multi-frame-qwop-v0` uses three sequential frames as the observation.
+The default environment (`qwop-v0`) encodes the state of the game as the position and angle of each of the runner's limbs.
+`frame-qwop-v0` encodes the state as the pixel data of the current frame of the game. `multi-frame-qwop-v0` uses three sequential frames as the state.
 
 Since we have implemented the environment as a gym environment, we can use existing implementations of many popular RL algorithms to train an agent.
 Running `python run-gym.py` will train a model using one of openai's implementations.
