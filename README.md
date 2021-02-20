@@ -1,5 +1,8 @@
 # RL QWOP
 
+
+![RL QWOP](https://drakesvoboda.com/public/images/RLQWOP.png)
+
 Forked from [here](https://github.com/juanto121/qwop-ai).
 
 A friend of mine is really good at the video game QWOP. 
