@@ -42,6 +42,6 @@ Running `python run-gym.py` will train a model using one of openai's algorithms.
 
 The `./RLQWOP` directory contains a customized implementation of the proximal policy optimization algorithm. My implementation borrows much from [openai's spinning up implementation of PPO](https://spinningup.openai.com/en/latest/algorithms/ppo.html#) with a modified strategy to paralellize training.
 
-In my implementation, several actor processes maintain their own copy of the model and gather experiences from the environment. Each actor adds their experiences to a shared replay buffer. A single learner process does gradient updates from the experiences stored in the replay buffer. After updating the model, the learner distributes the model's parameters back to the actor processes.
+In my implementation, paralell actor processes locally simulate the environment and run local copies of the policy. A single learner process gathers experiences from the actors and does gradient updates. After updating the model, the learner distributes the model's parameters back to the actor processes.
 
 Running `python run.py` will train a model using my implementation.

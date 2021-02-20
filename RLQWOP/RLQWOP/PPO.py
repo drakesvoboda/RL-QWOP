@@ -1,4 +1,7 @@
-
+""" Custom implementation of proximal policy optimization. Multiple parallel actors simulate the environment and 
+run local copies of the policy. Experiences are gathered by a learner processes that performs SGD to update the policy.
+The new policy is then sent back to the actor processes. 
+"""
 
 import time
 from functools import reduce

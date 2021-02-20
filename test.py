@@ -1,6 +1,6 @@
 from RLQWOP.QWOPEnvironment import QWOPEnvironment
 from RLQWOP.CNNActorCritic import CNNActorCritic
-from RLQWOP.ModelParallelPPO import PPOBuffer
+from RLQWOP.PPO import PPOBuffer
 from RLQWOP.RandomAgent import RandomAgent
 
 import cv2

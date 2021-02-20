@@ -2,7 +2,7 @@ import gym
 
 from RLQWOP.CNNActorCritic import CNNActorCritic
 from RLQWOP.MLPActorCritic import MLPActorCritic
-from RLQWOP.ModelParallelPPO import ppo
+from RLQWOP.PPO import ppo
 
 from spinup.utils.mpi_tools import mpi_fork
 
