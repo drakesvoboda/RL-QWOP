@@ -452,6 +452,7 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
     reset_result = env.reset()
     o = reset_result if isinstance(reset_result, np.ndarray) else reset_result[0]
     ep_ret, ep_len = 0, 0
+    ep_max_posx, ep_sum_posx = 0, 0
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -467,6 +468,12 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                 d = terminated or truncated
                 ep_ret += r
                 ep_len += 1
+
+                # Track position for logging
+                state = info.get('state', {})
+                posx = state.get('posx', 0)
+                ep_max_posx = max(ep_max_posx, posx)
+                ep_sum_posx += posx
 
                 # save and log
                 buf.store(o, a, r, v, logp)
@@ -496,12 +503,14 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                     else:
                         v = 0
                     buf.finish_path(v)
-                    if terminal:
-                        # only save EpRet / EpLen if trajectory finished
+                    # Log episode stats (both terminal and epoch-ended episodes)
+                    if ep_len > 0:
                         logger.store(EpRet=ep_ret, EpLen=ep_len)
+                        logger.store(EpMaxPosx=ep_max_posx, EpAvgPosx=ep_sum_posx/ep_len)
                     reset_result = env.reset()
                     o = reset_result if isinstance(reset_result, np.ndarray) else reset_result[0]
                     ep_ret, ep_len = 0, 0
+                    ep_max_posx, ep_sum_posx = 0, 0
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -519,6 +528,8 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('EpMaxPosx', with_min_and_max=True)
+        logger.log_tabular('EpAvgPosx', with_min_and_max=True)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
         # logger.log_tabular('LossPi', average_only=True)
