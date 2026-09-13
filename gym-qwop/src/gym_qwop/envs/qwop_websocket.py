@@ -121,6 +121,20 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
         """Handle WebSocket close."""
         logger.info("WebSocket connection closed")
 
+    def get_state(self) -> Dict[str, float]:
+        """Get current state (from last server response)."""
+        return self.last_state or {
+            "posx": 0.0,
+            "posy": 0.0,
+            "velx": 0.0,
+            "terminal": False,
+        }
+
+    def compute_reward(self, state: Dict[str, float] = None) -> float:
+        """Reward is computed by server and returned in response."""
+        state = state or self.get_state()
+        return float(state.get("reward", 0.0))
+
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute one environment step via WebSocket."""
         self._throttle()
