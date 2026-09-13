@@ -201,6 +201,18 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
             time.sleep(min_delta - delta)
         self.last_frame_time = time.time()
 
+    def render(self, mode='human', rank=None):
+        """Print human-readable state."""
+        state = self.get_state()
+        rank_str = f"[Agent {rank}] " if rank is not None else ""
+        print(
+            f"\r{rank_str}[QWOP-WS] Pos: {state.get('posx', 0):6.2f}  "
+            f"Height: {state.get('posy', 0):5.2f}  "
+            f"Vel: {state.get('velx', 0):6.2f}  "
+            f"Terminal: {state.get('terminal', False)}",
+            end="", flush=True
+        )
+
     def close(self):
         """Clean up resources."""
         if self.ws:

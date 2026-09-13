@@ -479,9 +479,17 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                 buf.store(o, a, r, v, logp)
                 logger.store(VVals=v)
 
-                # Render to see agent progress
-                if hasattr(env, 'render'):
-                    env.render()
+                # Only render from process 0 to avoid interleaved output in multi-CPU
+                if rank == 0 and hasattr(env, 'render'):
+                    try:
+                        # Show rank only in multi-CPU mode
+                        render_rank = rank if num_procs() > 1 else None
+                        env.unwrapped.render(rank=render_rank)
+                    except TypeError:
+                        try:
+                            env.render()
+                        except Exception:
+                            pass
 
                 # Update obs (critical!)
                 o = next_o
