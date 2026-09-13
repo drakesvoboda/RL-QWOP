@@ -9,7 +9,7 @@ from gymnasium import spaces
 class BaseQWOPEnv(gymnasium.Env, ABC):
     """Abstract base class for QWOP environments."""
 
-    metadata = {'render.modes': ['human']}
+    metadata = {'render_modes': ['human'], 'render_fps': 60}
 
     def __init__(self):
         """Initialize observation and action spaces."""
@@ -17,7 +17,7 @@ class BaseQWOPEnv(gymnasium.Env, ABC):
 
         # State vector: [posy, 8 joint positions, 8 joint velocities, velx]
         # Total: 1 + 8 + 8 + 1 = 18 dimensions
-        high = np.array([np.inf] * 18)
+        high = np.array([np.inf] * 18, dtype=np.float32)
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
         self.last_reward = 0.0

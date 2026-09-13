@@ -1,23 +1,20 @@
 """QWOP Gymnasium environments with real and mock implementations."""
+import gymnasium as gym
 from gymnasium.envs.registration import register
 
+# Register only if not already registered
+def _register_env(id, entry_point):
+    if id not in gym.registry:
+        register(id=id, entry_point=entry_point)
+
 # Mock QWOP (lightweight, no browser - great for testing/development)
-register(
-    id='qwop-mock-v0',
-    entry_point='gym_qwop.envs.mock_qwop:MockQWOPEnv',
-)
+_register_env('qwop-mock-v0', 'gym_qwop.envs.mock_qwop:MockQWOPEnv')
 
 # Real QWOP (requires game server + Selenium + Firefox)
-register(
-    id='qwop-v0',
-    entry_point='gym_qwop.envs.qwop_real:RealQWOPEnv',
-)
+_register_env('qwop-v0', 'gym_qwop.envs.qwop_real:RealQWOPEnv')
 
 # WebSocket QWOP (fast alternative - 10-20x speedup, requires game server with WebSocket)
-register(
-    id='qwop-websocket-v0',
-    entry_point='gym_qwop.envs.qwop_websocket:WebSocketQWOPEnv',
-)
+_register_env('qwop-websocket-v0', 'gym_qwop.envs.qwop_websocket:WebSocketQWOPEnv')
 
 # Aliases for backward compatibility
 try:

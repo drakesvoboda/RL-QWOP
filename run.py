@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, 'rl-qwop/src')
+sys.path.insert(0, 'src')
 
 import gymnasium as gym
 import gym_qwop.envs  # Register environments
@@ -25,7 +25,7 @@ if __name__ == '__main__':
 
     logger_kwargs = dict(output_dir=f'logs/ppo_qwop_{args.seed}')
 
-    ppo(lambda : gym.make("qwop-v0"),  # Use "qwop-websocket-v0" for 10-20x speedup (requires game server WebSocket support) 
+    ppo(lambda : gym.make("qwop-websocket-v0"),  # Use "qwop-websocket-v0" for 10-20x speedup (requires game server WebSocket support) 
         actor_critic=MLPActorCritic, 
         gamma=args.gamma,
         seed=args.seed, 
