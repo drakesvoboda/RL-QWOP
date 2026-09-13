@@ -15,7 +15,9 @@ dependencies = [
     "scipy>=1.7.0",
     "matplotlib>=3.5.0",
     "opencv-python>=4.5.0",
-    "gym-qwop @ file:///Users/drakesvoboda/Documents/Projects/RL-QWOP/gym-qwop#egg=gym-qwop",
+    "selenium>=3.0.0",
+    "requests>=2.25.0",
+    "websocket-client>=1.0.0",
 ]
 
 optional-dependencies = {
