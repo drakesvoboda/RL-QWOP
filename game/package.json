@@ -1,0 +1,16 @@
+{
+  "name": "qwop-game",
+  "version": "1.0.0",
+  "description": "QWOP game server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["qwop", "game"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.17.1"
+  }
+}

@@ -1,16 +1,14 @@
-from RLQWOP.QWOPEnvironment import QWOPEnvironment
-from RLQWOP.CNNActorCritic import CNNActorCritic
-from RLQWOP.PPO import PPOBuffer
-from RLQWOP.RandomAgent import RandomAgent
+import sys
+sys.path.insert(0, 'rl-qwop/src')
 
 import cv2
-import gym
+import gymnasium as gym
 import time
-
 import numpy as np
 
-from spinup.utils.mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-from stable_baselines.common.env_checker import check_env
+from rlqwop.CNNActorCritic import CNNActorCritic
+from rlqwop.PPO import PPOBuffer
+from rlqwop.spinup_utils import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
 
 # env = Environment()
 

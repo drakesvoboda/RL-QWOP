@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 
 from stable_baselines.common.policies import MlpPolicy, MlpLstmPolicy, CnnPolicy, CnnLstmPolicy, CnnLnLstmPolicy
 from stable_baselines.common import make_vec_env

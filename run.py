@@ -1,10 +1,12 @@
-import gym
+import sys
+sys.path.insert(0, 'rl-qwop/src')
 
-from RLQWOP.CNNActorCritic import CNNActorCritic
-from RLQWOP.MLPActorCritic import MLPActorCritic
-from RLQWOP.PPO import ppo
+import gymnasium as gym
 
-from spinup.utils.mpi_tools import mpi_fork
+from rlqwop.CNNActorCritic import CNNActorCritic
+from rlqwop.MLPActorCritic import MLPActorCritic
+from rlqwop.PPO import ppo
+from rlqwop.spinup_utils import mpi_fork
 
 if __name__ == '__main__':
     import argparse
@@ -20,8 +22,7 @@ if __name__ == '__main__':
 
     mpi_fork(args.cpu)  # run parallel code with mpi
 
-    from spinup.utils.run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs('PPO', args.seed)
+    logger_kwargs = dict(output_dir=f'logs/ppo_qwop_{args.seed}')
 
     ppo(lambda : gym.make("gym_qwop:qwop-v0"), actor_critic=MLPActorCritic, gamma=args.gamma,
         seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,

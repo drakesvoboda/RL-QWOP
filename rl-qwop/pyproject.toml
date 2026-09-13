@@ -1,0 +1,27 @@
+[project]
+name = "rlqwop"
+version = "0.1.0"
+description = "RL training agents to play QWOP"
+readme = "README.md"
+authors = [
+    { name = "Drake Svoboda", email = "drakesvoboda@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "gymnasium>=0.28.0",
+    "torch>=2.0.0",
+    "tqdm>=4.60.0",
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+    "matplotlib>=3.5.0",
+    "opencv-python>=4.5.0",
+    "gym-qwop @ file:///Users/drakesvoboda/Documents/Projects/RL-QWOP/gym-qwop#egg=gym-qwop",
+]
+
+optional-dependencies = {
+    mpi = ["mpi4py>=3.1.0"],
+}
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"

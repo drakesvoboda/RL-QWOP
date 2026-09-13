@@ -1,0 +1,18 @@
+[project]
+name = "gym-qwop"
+version = "0.0.1"
+description = "QWOP environment for Gym"
+authors = [
+    { name = "Drake Svoboda", email = "drakesvoboda@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "gymnasium>=0.28.0",
+    "opencv-python>=4.5.0",
+    "selenium>=3.0.0",
+    "requests>=2.25.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
