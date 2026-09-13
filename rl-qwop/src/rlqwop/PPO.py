@@ -25,6 +25,11 @@ except ImportError:
             @staticmethod
             def Get_rank():
                 return 0
+            @staticmethod
+            def Gatherv(*args, **kwargs):
+                pass
+        class FLOAT:
+            pass
     MPI = _MockMPI()
 
 import gymnasium as gym
@@ -80,11 +85,12 @@ def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, targ
 
     early_stop = False
 
-    ac.v = ac.v.cuda()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    ac.v = ac.v.to(device)
 
     for i in trange(num_iters):
         for obs, act, ret, adv, logp_old in dataloader:
-            obs, ret = obs.cuda(), ret.cuda()
+            obs, ret = obs.to(device), ret.to(device)
 
             pred_return = ac.v(obs)
             vf_loss = critic_loss(pred_return, ret)
@@ -95,14 +101,14 @@ def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, targ
 
     ac.v = ac.v.cpu()
 
-    ac.pi = ac.pi.cuda()
+    ac.pi = ac.pi.to(device)
 
     kl_sum = 0
     kl_total = 0
 
     for i in trange(num_iters):
-        for obs, act, ret, adv, logp_old in dataloader: 
-            obs, act, adv, logp_old = obs.cuda(), act.cuda(), adv.cuda(), logp_old.cuda()
+        for obs, act, ret, adv, logp_old in dataloader:
+            obs, act, adv, logp_old = obs.to(device), act.to(device), adv.to(device), logp_old.to(device)
 
             pi, logp = ac.pi(obs, act)
 
@@ -412,6 +418,8 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                 a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
 
                 a = a.squeeze()
+                v = float(v.squeeze())
+                logp = float(logp.squeeze())
 
                 next_o, r, d, _ = env.step(a)
                 ep_ret += r
@@ -437,6 +445,7 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                     # if trajectory didn't reach terminal state, bootstrap value target
                     if timeout or epoch_ended:
                         _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
+                        v = float(v.squeeze())
                     else:
                         v = 0
                     buf.finish_path(v)

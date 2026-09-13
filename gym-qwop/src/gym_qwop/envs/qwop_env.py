@@ -98,9 +98,9 @@ class QWOPEnv(gym.Env):
     def compute_reward(self, state=None):
         curr_time = time.time()
         state = state if state != None else self.get_state()
-        reward = state["diffx"] / (curr_time - self.last_reward)
+        reward = state["diffx"]
 
-        reward = -1 if state["terminal"] else reward
+        reward = -100 if state["terminal"] else reward
 
         self.last_reward = time.time()
 
