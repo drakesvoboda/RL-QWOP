@@ -24,6 +24,15 @@ if __name__ == '__main__':
 
     logger_kwargs = dict(output_dir=f'logs/ppo_qwop_{args.seed}')
 
-    ppo(lambda : gym.make("gym_qwop:qwop-v0"), actor_critic=MLPActorCritic, gamma=args.gamma,
-        seed=args.seed, steps_per_epoch=args.steps, epochs=args.epochs,
-        logger_kwargs=logger_kwargs, pi_lr=1e-6, vf_lr=1e-4, target_kl=0.05, train_pi_iters=80, train_v_iters=80)
+    ppo(lambda : gym.make("gym_qwop:qwop-v0"), 
+        actor_critic=MLPActorCritic, 
+        gamma=args.gamma,
+        seed=args.seed, 
+        steps_per_epoch=args.steps, 
+        epochs=args.epochs,
+        logger_kwargs=logger_kwargs, 
+        pi_lr=1e-6, 
+        vf_lr=1e-4, 
+        target_kl=0.05, 
+        train_pi_iters=80, 
+        train_v_iters=80)

@@ -81,8 +81,12 @@ class RealQWOPEnv(BaseQWOPEnv):
         self.canvas = None
         self.terminal_div = None
         self.state_elem = None
-        self.max_fps = 8
+        self.max_fps = 60  # Increased from 8 FPS (125ms throttle) to 60 FPS (16.7ms throttle)
         self.last_frame_time = time.time()
+
+        # For velocity tracking
+        self.last_joint_angles = {}
+        self.joint_names = ["head", "torso", "leftarm", "rightarm", "leftthigh", "rightthigh", "leftcalf", "rightcalf"]
 
         # Auto-start game server if requested
         if auto_start_server:
@@ -289,17 +293,36 @@ class RealQWOPEnv(BaseQWOPEnv):
             raise RuntimeError(f"Failed to get game state: {e}")
 
     def compute_reward(self, state: Dict[str, float] = None) -> float:
-        """Compute reward based on forward progress."""
+        """Compute shaped reward to guide exploration and learning."""
         state = state or self.get_state()
 
         current_time = time.time()
         delta = current_time - self.last_reward if hasattr(self, "last_reward") else 0.1
         self.last_reward = current_time
 
-        reward = state.get("diffx", 0) / max(delta, 0.001)
+        # Main reward: forward progress
+        r_forward = state.get("diffx", 0) / max(delta, 0.001)
 
+        # Intermediate reward: reward trying different muscle combinations
+        joint_movement = 0
+        for joint in self.joint_names:
+            if joint in self.last_joint_angles:
+                angle = state.get(joint, 0)
+                last_angle = self.last_joint_angles[joint]
+                joint_movement += abs(angle - last_angle)
+            self.last_joint_angles[joint] = state.get(joint, 0)
+
+        r_joint_movement = min(joint_movement / 10.0, 1.0) * 0.1  # Clamp and weight
+
+        # Stability reward: encourage staying upright
+        r_stability = max(0, 1.0 - abs(state.get("posy", 0) - 0.5) * 0.5) * 0.05
+
+        # Combine rewards
+        reward = 0.8 * r_forward + r_joint_movement + r_stability
+
+        # Strong penalty for falling
         if state.get("terminal", False):
-            reward = -1.0
+            reward = -5.0
 
         return float(reward)
 
@@ -376,6 +399,17 @@ class RealQWOPEnv(BaseQWOPEnv):
         if delta < min_delta:
             time.sleep(min_delta - delta)
         self.last_frame_time = time.time()
+
+    def render(self, mode='human'):
+        """Print human-readable state."""
+        state = self.get_state()
+        print(
+            f"\r[QWOP] Pos: {state.get('posx', 0):6.2f}  "
+            f"Height: {state.get('posy', 0):5.2f}  "
+            f"Vel: {state.get('velx', 0):6.2f}  "
+            f"Terminal: {state.get('terminal', False)}",
+            end="", flush=True
+        )
 
     def _signal_handler(self, sig, frame):
         """Handle system signals."""

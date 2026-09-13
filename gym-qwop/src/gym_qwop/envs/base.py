@@ -60,23 +60,35 @@ class BaseQWOPEnv(gymnasium.Env, ABC):
         pass
 
     def obs(self, state: Dict[str, float] = None) -> np.ndarray:
-        """Convert state to observation vector."""
+        """Convert state to observation vector (positions + velocities)."""
         state = state or self.get_state()
-        return np.array([
-            state.get("posy", 0),
-            state.get("head", 0),
-            state.get("torso", 0),
-            state.get("leftarm", 0),
-            state.get("rightarm", 0),
-            state.get("leftthigh", 0),
-            state.get("rightthigh", 0),
-            state.get("leftcalf", 0),
-            state.get("rightcalf", 0),
-        ], dtype=np.float32)
+        joint_names = ["head", "torso", "leftarm", "rightarm", "leftthigh", "rightthigh", "leftcalf", "rightcalf"]
+
+        # Positions
+        obs = [state.get("posy", 0)]
+        obs.extend([state.get(joint, 0) for joint in joint_names])
+
+        # Velocities (from state if available)
+        obs.extend([state.get(f"{joint}_vel", 0) for joint in joint_names])
+
+        # Horizontal velocity
+        obs.append(state.get("velx", 0))
+
+        return np.array(obs, dtype=np.float32)
 
     def render(self, mode='human') -> None:
         """Render environment (optional)."""
         pass
+
+    def get_render_state(self) -> str:
+        """Get a human-readable representation of current state."""
+        state = self.get_state()
+        return (
+            f"Position: {state.get('posx', 0):.2f}  "
+            f"Height: {state.get('posy', 0):.2f}  "
+            f"Velocity: {state.get('velx', 0):.2f}  "
+            f"Terminal: {state.get('terminal', False)}"
+        )
 
     def close(self) -> None:
         """Clean up resources."""

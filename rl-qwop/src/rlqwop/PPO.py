@@ -79,59 +79,86 @@ def actor_loss(pi, adv, logp, logp_old, clip_ratio):
 def critic_loss(pred, ret):  
     return ((pred - ret)**2).mean()
 
-def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, target_kl, logger, batch_size=128):
+def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, target_kl, logger, batch_size=None):
     dataset = BufferDataset(data)
-    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=2, shuffle=True)
 
-    early_stop = False
+    # Adaptive batch size: 4-8 batches per epoch max
+    if batch_size is None:
+        batch_size = max(4, len(dataset) // 8)
+
+    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=0, shuffle=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     ac.v = ac.v.to(device)
-
-    for i in trange(num_iters):
-        for obs, act, ret, adv, logp_old in dataloader:
-            obs, ret = obs.to(device), ret.to(device)
-
-            pred_return = ac.v(obs)
-            vf_loss = critic_loss(pred_return, ret)
-
-            vf_optimizer.zero_grad()
-            vf_loss.backward()
-            vf_optimizer.step()
-
-    ac.v = ac.v.cpu()
-
     ac.pi = ac.pi.to(device)
 
     kl_sum = 0
     kl_total = 0
+    loss_pi_sum = 0.0
+    loss_v_sum = 0.0
+    approx_kl_sum = 0.0
+    ent_sum = 0.0
+    clipfrac_sum = 0.0
+    n_updates = 0
 
+    # Joint policy and value optimization
     for i in trange(num_iters):
         for obs, act, ret, adv, logp_old in dataloader:
-            obs, act, adv, logp_old = obs.to(device), act.to(device), adv.to(device), logp_old.to(device)
+            obs = obs.to(device)
+            act = act.to(device)
+            ret = ret.to(device)
+            adv = adv.to(device)
+            logp_old = logp_old.to(device)
 
+            # Policy update
             pi, logp = ac.pi(obs, act)
-
             pi_loss, pi_info = actor_loss(pi, adv, logp, logp_old, clip_ratio)
+
+            # Value update
+            pred_return = ac.v(obs)
+            vf_loss = critic_loss(pred_return, ret)
+
+            # Combined loss
+            loss = pi_loss + vf_loss
+
+            pi_optimizer.zero_grad()
+            vf_optimizer.zero_grad()
+            loss.backward()
+            pi_optimizer.step()
+            vf_optimizer.step()
+
+            # Collect statistics
+            loss_pi_sum += pi_loss.item()
+            loss_v_sum += vf_loss.item()
+            approx_kl_sum += pi_info['kl']
+            ent_sum += pi_info['ent']
+            clipfrac_sum += pi_info['cf']
+            n_updates += 1
 
             kl_sum += (logp_old - logp).sum().item()
             kl_total += logp_old.shape[0]
 
-            pi_optimizer.zero_grad()
-            pi_loss.backward()
-            pi_optimizer.step()
+        # Early stopping per epoch of policy updates
+        if kl_total > 0:
+            avg_kl = kl_sum / kl_total
+            if avg_kl > 1.5 * target_kl:
+                logger.log(f'Early stopping at epoch {i} due to reaching max kl: {avg_kl:.4f}')
+                break
 
-        kl = kl_sum / kl_total
-        if kl > 1.5 * target_kl:
-            logger.log('Early stopping due to reaching max kl.')
-            break
-
+    ac.v = ac.v.cpu()
     ac.pi = ac.pi.cpu()
 
-    logger.store(LossPi=0, LossV=0,
-                KL=0, Entropy=0, ClipFrac=0,
-                DeltaLossPi=(0),
-                DeltaLossV=(0))
+    # Log actual statistics
+    if n_updates > 0:
+        logger.store(
+            LossPi=loss_pi_sum / n_updates,
+            LossV=loss_v_sum / n_updates,
+            KL=approx_kl_sum / n_updates,
+            Entropy=ent_sum / n_updates,
+            ClipFrac=clipfrac_sum / n_updates,
+            DeltaLossPi=0,
+            DeltaLossV=0
+        )
 
     return ac.cpu()
 
@@ -198,6 +225,15 @@ class PPOBuffer:
 
         self.path_start_idx = self.ptr
 
+    def normalize_advantages(self):
+        """Normalize advantages with safe handling of zero variance."""
+        adv_mean = self.adv_buf.mean()
+        adv_std = self.adv_buf.std()
+        if adv_std > 1e-8:
+            self.adv_buf = (self.adv_buf - adv_mean) / (adv_std + 1e-8)
+        else:
+            self.adv_buf = self.adv_buf - adv_mean
+
     def get(self):
         """
         Call this at the end of an epoch to get all of the data from
@@ -249,8 +285,14 @@ class PPOBuffer:
         obs_buf = obs_buf.reshape(core.combined_shape(size, self.obs_dim))
         act_buf = act_buf.reshape(core.combined_shape(size, self.act_dim))
 
-        adv_buf = (adv_buf - np.mean(adv_buf)) / np.std(adv_buf) 
-     
+        # Safe advantage normalization
+        adv_mean = adv_buf.mean()
+        adv_std = adv_buf.std()
+        if adv_std > 1e-8:
+            adv_buf = (adv_buf - adv_mean) / (adv_std + 1e-8)
+        else:
+            adv_buf = adv_buf - adv_mean
+
         data = dict(obs=obs_buf, act=act_buf, ret=ret_buf, adv=adv_buf, logp=logp_buf)
 
         return data
@@ -428,6 +470,10 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                 # save and log
                 buf.store(o, a, r, v, logp)
                 logger.store(VVals=v)
+
+                # Render to see agent progress
+                if hasattr(env, 'render'):
+                    env.render()
 
                 # Update obs (critical!)
                 o = next_o

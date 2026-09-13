@@ -46,10 +46,12 @@ class MLPCritic(Critic):
 
 class MLPActorCritic(ActorCritic):
     def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh):
+                 hidden_sizes=(128,), activation=nn.ReLU):
         super().__init__()
 
         obs_dim = observation_space.shape[0]   
+
+        print('obs_dim', obs_dim)
 
         self.pi = MLPActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
         self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
