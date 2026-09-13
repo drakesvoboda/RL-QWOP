@@ -582,6 +582,7 @@ dependencies = [
     { name = "opencv-python" },
     { name = "requests" },
     { name = "selenium" },
+    { name = "websocket-client" },
 ]
 
 [package.metadata]
@@ -590,6 +591,7 @@ requires-dist = [
     { name = "opencv-python", specifier = ">=4.5.0" },
     { name = "requests", specifier = ">=2.25.0" },
     { name = "selenium", specifier = ">=3.0.0" },
+    { name = "websocket-client", specifier = ">=1.0.0" },
 ]
 
 [[package]]

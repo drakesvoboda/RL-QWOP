@@ -13,6 +13,12 @@ register(
     entry_point='gym_qwop.envs.qwop_real:RealQWOPEnv',
 )
 
+# WebSocket QWOP (fast alternative - 10-20x speedup, requires game server with WebSocket)
+register(
+    id='qwop-websocket-v0',
+    entry_point='gym_qwop.envs.qwop_websocket:WebSocketQWOPEnv',
+)
+
 # Aliases for backward compatibility
 try:
     from gym_qwop.envs.qwop_real import RealQWOPEnv as QWOPEnv

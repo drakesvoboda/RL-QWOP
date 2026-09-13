@@ -15,8 +15,9 @@ class BaseQWOPEnv(gymnasium.Env, ABC):
         """Initialize observation and action spaces."""
         self.action_space = spaces.MultiBinary(4)  # Q, W, O, P keys
 
-        # State vector: [posy, head, torso, leftarm, rightarm, leftthigh, rightthigh, leftcalf, rightcalf]
-        high = np.array([np.inf] * 9)
+        # State vector: [posy, 8 joint positions, 8 joint velocities, velx]
+        # Total: 1 + 8 + 8 + 1 = 18 dimensions
+        high = np.array([np.inf] * 18)
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
 
         self.last_reward = 0.0

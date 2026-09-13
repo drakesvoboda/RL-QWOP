@@ -463,7 +463,8 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
                 v = float(v.squeeze())
                 logp = float(logp.squeeze())
 
-                next_o, r, d, _ = env.step(a)
+                next_o, r, terminated, truncated, info = env.step(a)
+                d = terminated or truncated
                 ep_ret += r
                 ep_len += 1
 
