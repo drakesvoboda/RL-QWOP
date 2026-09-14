@@ -18,6 +18,7 @@ dependencies = [
     "selenium>=3.0.0",
     "requests>=2.25.0",
     "websocket-client>=1.0.0",
+    "tensorboard>=2.21.0",
 ]
 
 optional-dependencies = {

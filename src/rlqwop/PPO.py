@@ -1,46 +1,28 @@
-""" Custom implementation of proximal policy optimization. Multiple parallel actors simulate the environment and 
-run local copies of the policy. Experiences are gathered by a learner processes that performs SGD to update the policy.
-The new policy is then sent back to the actor processes. 
+""" Custom implementation of proximal policy optimization.
+
+Parallelism is vectorized, not multi-process-with-synced-policies: `num_envs` copies of the
+environment run in subprocesses (gymnasium.vector.AsyncVectorEnv), stepped in lockstep from
+this one process, which holds the only copy of the policy. Each iteration does one batched
+forward pass across all `num_envs` observations rather than `num_envs` separate ones. This
+fits the workload here - the environment (a real browser) is what's slow, not the policy
+(a couple thousand params) - so parallelizing environment stepping is what matters; there's
+no need for multiple policy copies, gradient synchronization, or cross-process communication
+at all, since the single policy never leaves this process.
 """
 
 import time
-from functools import reduce
 import numpy as np
 from tqdm import tqdm, trange
 
 import torch
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader, RandomSampler
-
-try:
-    from mpi4py import MPI
-    _HAS_MPI = True
-except ImportError:
-    _HAS_MPI = False
-    class _MockMPI:
-        class COMM_WORLD:
-            @staticmethod
-            def Get_size():
-                return 1
-            @staticmethod
-            def Get_rank():
-                return 0
-            @staticmethod
-            def Gatherv(*args, **kwargs):
-                pass
-        class FLOAT:
-            pass
-    MPI = _MockMPI()
-
-import gymnasium as gym
+from gymnasium.vector import AsyncVectorEnv, SyncVectorEnv
+from gymnasium.vector.vector_env import AutoresetMode
+from gymnasium.wrappers import TimeLimit
 
 from rlqwop.MLPActorCritic import MLPActorCritic
-from rlqwop.spinup_utils import (
-    EpochLogger,
-    combined_shape, discount_cumsum, count_vars,
-    setup_pytorch_for_mpi, sync_params, mpi_avg_grads,
-    mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
-)
+from rlqwop.spinup_utils import EpochLogger, combined_shape, discount_cumsum, count_vars, RunningMeanStd
 
 # Create a mock core module for compatibility
 class _CoreModule:
@@ -62,24 +44,29 @@ class BufferDataset(Dataset):
         return self.data['obs'][idx], self.data['act'][idx], self.data['ret'][idx], self.data['adv'][idx], self.data['logp'][idx]
 
 
-def actor_loss(pi, adv, logp, logp_old, clip_ratio): 
+def actor_loss(pi, adv, logp, logp_old, clip_ratio, ent_coef=0.0):
     ratio = torch.exp(logp - logp_old)
     clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
-    loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+    entropy = pi.entropy().mean()
+    # Entropy bonus: without it, PPO has no pressure to keep trying varied actions once it
+    # finds anything that survives - it's free to collapse onto the first workable gait
+    # (e.g. a safe scoot) even if better ones exist, since nothing in the objective values
+    # the exploration needed to find them.
+    loss_pi = -(torch.min(ratio * adv, clip_adv)).mean() - ent_coef * entropy
 
     # Useful extra info
     approx_kl = (logp_old - logp).mean().item()
-    ent = pi.entropy().mean().item()
     clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
     clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-    pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+    pi_info = dict(kl=approx_kl, ent=entropy.item(), cf=clipfrac)
 
     return loss_pi, pi_info
 
 def critic_loss(pred, ret):  
     return ((pred - ret)**2).mean()
 
-def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, target_kl, logger, batch_size=None):
+def run_update(ac, data, pi_optimizer, vf_optimizer, train_pi_iters, train_v_iters, clip_ratio,
+               target_kl, logger, batch_size=None, ent_coef=0.0, max_grad_norm=0.5):
     dataset = BufferDataset(data)
 
     # Adaptive batch size: 4-8 batches per epoch max
@@ -92,73 +79,86 @@ def run_update(ac, data, pi_optimizer, vf_optimizer, num_iters, clip_ratio, targ
     ac.v = ac.v.to(device)
     ac.pi = ac.pi.to(device)
 
-    kl_sum = 0
-    kl_total = 0
+    # --- Policy update: up to train_pi_iters passes over the buffer, stopping early if
+    # this pass's average KL from the old policy exceeds the target. KL is computed fresh
+    # per pass (not accumulated across passes) - averaging it in with earlier, typically
+    # much smaller KL values would dilute the signal and let the policy drift far more per
+    # update than target_kl is meant to allow before this triggers. ---
     loss_pi_sum = 0.0
-    loss_v_sum = 0.0
     approx_kl_sum = 0.0
     ent_sum = 0.0
     clipfrac_sum = 0.0
-    n_updates = 0
+    n_pi_updates = 0
+    pi_iters_run = 0
 
-    # Joint policy and value optimization
-    for i in trange(num_iters):
+    for i in trange(train_pi_iters, desc='pi'):
+        pi_iters_run = i + 1
+        kl_sum = 0.0
+        kl_total = 0
         for obs, act, ret, adv, logp_old in dataloader:
             obs = obs.to(device)
             act = act.to(device)
-            ret = ret.to(device)
             adv = adv.to(device)
             logp_old = logp_old.to(device)
 
-            # Policy update
             pi, logp = ac.pi(obs, act)
-            pi_loss, pi_info = actor_loss(pi, adv, logp, logp_old, clip_ratio)
-
-            # Value update
-            pred_return = ac.v(obs)
-            vf_loss = critic_loss(pred_return, ret)
-
-            # Combined loss
-            loss = pi_loss + vf_loss
+            pi_loss, pi_info = actor_loss(pi, adv, logp, logp_old, clip_ratio, ent_coef)
 
             pi_optimizer.zero_grad()
-            vf_optimizer.zero_grad()
-            loss.backward()
+            pi_loss.backward()
+            torch.nn.utils.clip_grad_norm_(ac.pi.parameters(), max_grad_norm)
             pi_optimizer.step()
-            vf_optimizer.step()
 
-            # Collect statistics
             loss_pi_sum += pi_loss.item()
-            loss_v_sum += vf_loss.item()
             approx_kl_sum += pi_info['kl']
             ent_sum += pi_info['ent']
             clipfrac_sum += pi_info['cf']
-            n_updates += 1
+            n_pi_updates += 1
 
             kl_sum += (logp_old - logp).sum().item()
             kl_total += logp_old.shape[0]
 
-        # Early stopping per epoch of policy updates
-        if kl_total > 0:
-            avg_kl = kl_sum / kl_total
-            if avg_kl > 1.5 * target_kl:
-                logger.log(f'Early stopping at epoch {i} due to reaching max kl: {avg_kl:.4f}')
-                break
+        avg_kl = kl_sum / kl_total if kl_total > 0 else 0.0
+        if avg_kl > 1.5 * target_kl:
+            logger.log(f'Early stopping policy update at iter {i} due to reaching max kl: {avg_kl:.4f}')
+            break
+
+    # --- Value function update: a fixed train_v_iters passes, independent of the policy's
+    # early stopping above - value regression doesn't have the same on/off-policy drift
+    # risk that motivates stopping the policy update early. ---
+    loss_v_sum = 0.0
+    n_v_updates = 0
+
+    for _ in trange(train_v_iters, desc='v'):
+        for obs, act, ret, adv, logp_old in dataloader:
+            obs = obs.to(device)
+            ret = ret.to(device)
+
+            pred_return = ac.v(obs)
+            vf_loss = critic_loss(pred_return, ret)
+
+            vf_optimizer.zero_grad()
+            vf_loss.backward()
+            torch.nn.utils.clip_grad_norm_(ac.v.parameters(), max_grad_norm)
+            vf_optimizer.step()
+
+            loss_v_sum += vf_loss.item()
+            n_v_updates += 1
 
     ac.v = ac.v.cpu()
     ac.pi = ac.pi.cpu()
 
     # Log actual statistics
-    if n_updates > 0:
+    if n_pi_updates > 0:
         logger.store(
-            LossPi=loss_pi_sum / n_updates,
-            LossV=loss_v_sum / n_updates,
-            KL=approx_kl_sum / n_updates,
-            Entropy=ent_sum / n_updates,
-            ClipFrac=clipfrac_sum / n_updates,
-            DeltaLossPi=0,
-            DeltaLossV=0
+            LossPi=loss_pi_sum / n_pi_updates,
+            KL=approx_kl_sum / n_pi_updates,
+            Entropy=ent_sum / n_pi_updates,
+            ClipFrac=clipfrac_sum / n_pi_updates,
+            StopIter=pi_iters_run,
         )
+    if n_v_updates > 0:
+        logger.store(LossV=loss_v_sum / n_v_updates)
 
     return ac.cpu()
 
@@ -243,65 +243,69 @@ class PPOBuffer:
         assert self.ptr == self.max_size    # buffer has to be full before you can get
         self.ptr, self.path_start_idx = 0, 0
         # the next two lines implement the advantage normalization trick
-        adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
-        self.adv_buf = (self.adv_buf - adv_mean) / adv_std
+        adv_mean, adv_std = self.adv_buf.mean(), self.adv_buf.std()
+        self.adv_buf = (self.adv_buf - adv_mean) / (adv_std + 1e-8) if adv_std > 1e-8 else self.adv_buf - adv_mean
         data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
                     adv=self.adv_buf, logp=self.logp_buf)
         return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
 
-    def mpi_gather(self, root=0):
-        assert self.ptr == self.max_size    # buffer has to be full before you can get
 
-        self.ptr, self.path_start_idx = 0, 0
+def combine_buffers(bufs):
+    """Concatenate several envs' full local buffers (one per vectorized env) into a single
+    training batch, normalizing advantages once across the combined pool - the vectorized
+    equivalent of what the old MPI-style mpi_gather did across processes, except everything
+    is already in this one process, so it's just concatenation, no communication."""
+    for buf in bufs:
+        assert buf.ptr == buf.max_size    # every buffer must be full before combining
+        buf.ptr, buf.path_start_idx = 0, 0
 
-        comm = MPI.COMM_WORLD
+    obs = np.concatenate([b.obs_buf for b in bufs], axis=0)
+    act = np.concatenate([b.act_buf for b in bufs], axis=0)
+    adv = np.concatenate([b.adv_buf for b in bufs], axis=0)
+    ret = np.concatenate([b.ret_buf for b in bufs], axis=0)
+    logp = np.concatenate([b.logp_buf for b in bufs], axis=0)
 
-        num_procs = comm.Get_size()
-        rank = comm.Get_rank()
-        
-        size = self.max_size * num_procs
-        offsets = np.arange(0, size, self.max_size)
+    adv_mean, adv_std = adv.mean(), adv.std()
+    adv = (adv - adv_mean) / (adv_std + 1e-8) if adv_std > 1e-8 else adv - adv_mean
 
-        flat_obs = reduce(lambda a,b: a*b, self.obs_dim)
-        
-        obs_buf  = np.zeros(size * flat_obs, dtype=np.float32)
-        act_buf  = np.zeros(size * self.act_dim, dtype=np.float32)
-        adv_buf  = np.zeros(size, dtype=np.float32)
-        rew_buf  = np.zeros(size, dtype=np.float32)
-        ret_buf  = np.zeros(size, dtype=np.float32)
-        val_buf  = np.zeros(size, dtype=np.float32)
-        logp_buf = np.zeros(size, dtype=np.float32)
+    return dict(obs=obs, act=act, ret=ret, adv=adv, logp=logp)
 
-        comm.Gatherv(self.obs_buf.flatten(), [obs_buf, size * flat_obs, offsets*flat_obs, MPI.FLOAT], root=root)
-        comm.Gatherv(self.act_buf.flatten(), [act_buf, size * self.act_dim, offsets*self.act_dim, MPI.FLOAT], root=root)
-        comm.Gatherv(self.adv_buf, [adv_buf, size, offsets, MPI.FLOAT], root=root)
-        comm.Gatherv(self.rew_buf, [rew_buf, size, offsets, MPI.FLOAT], root=root)
-        comm.Gatherv(self.ret_buf, [ret_buf, size, offsets, MPI.FLOAT], root=root)
-        comm.Gatherv(self.val_buf, [val_buf, size, offsets, MPI.FLOAT], root=root)
-        comm.Gatherv(self.logp_buf, [logp_buf, size, offsets, MPI.FLOAT], root=root)
 
-        if rank != root: return None
+def _info_get(info_dict, key, i):
+    """Read info_dict[key][i], gated by the parallel info_dict["_"+key][i] boolean mask -
+    gymnasium's vector-info convention for keys not every env provides every step."""
+    values = info_dict.get(key)
+    mask = info_dict.get(f"_{key}")
+    if values is None or mask is None or not mask[i]:
+        return None
+    return values[i]
 
-        obs_buf = obs_buf.reshape(core.combined_shape(size, self.obs_dim))
-        act_buf = act_buf.reshape(core.combined_shape(size, self.act_dim))
 
-        # Safe advantage normalization
-        adv_mean = adv_buf.mean()
-        adv_std = adv_buf.std()
-        if adv_std > 1e-8:
-            adv_buf = (adv_buf - adv_mean) / (adv_std + 1e-8)
-        else:
-            adv_buf = adv_buf - adv_mean
+def _vector_scalar(infos, key, i, done):
+    """Extract env i's `key` (a top-level scalar info field, e.g. "posx"/"velx") for this
+    step. On a step where env i auto-resets (SAME_STEP autoreset mode), the real
+    terminal-step info nests one level deeper - under `final_info` - instead of at the top
+    level. `final_info` itself isn't a per-env array like other info keys (its "value" is
+    a whole nested vector-info dict shared across envs, keyed by field name), so it needs
+    its own presence check via `_final_info` rather than going through `_info_get`."""
+    if done:
+        final_mask = infos.get("_final_info")
+        if final_mask is None or not final_mask[i]:
+            return 0
+        return _info_get(infos.get("final_info", {}), key, i) or 0
+    return _info_get(infos, key, i) or 0
 
-        data = dict(obs=obs_buf, act=act_buf, ret=ret_buf, adv=adv_buf, logp=logp_buf)
 
-        return data
+def _vector_final_obs(infos, i):
+    """Extract env i's actual terminal observation, before its SAME_STEP auto-reset."""
+    return _info_get(infos, "final_obs", i)
 
 
 def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
         steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
         vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
-        target_kl=0.01, logger_kwargs=dict(), save_freq=10):
+        target_kl=0.01, logger_kwargs=dict(), save_freq=10, num_envs=1, ent_coef=0.01,
+        max_grad_norm=0.5, normalize_obs=True, resume_from=None):
     """
     Proximal Policy Optimization (by clipping), 
 
@@ -403,150 +407,226 @@ def ppo(env_fn, actor_critic=MLPActorCritic, ac_kwargs={}, seed=0,
         save_freq (int): How often (in terms of gap between epochs) to save
             the current policy and value function.
 
+        num_envs (int): Number of environments to run in parallel (each in its own
+            subprocess/browser tab), stepped in lockstep from this one process. There's
+            only ever one policy - no per-process copies or weight synchronization -
+            since every env's experience lands in this same process either way.
+
+        ent_coef (float): Entropy bonus coefficient, subtracted from the policy loss
+            (loss_pi -= ent_coef * entropy). Without this, PPO has no explicit pressure to
+            keep trying varied actions once it finds anything that survives, so it can
+            collapse onto a safe-but-mediocre gait rather than exploring toward a better
+            one. Higher values push harder for continued exploration at the cost of
+            slower convergence to a specific behavior.
+
+        max_grad_norm (float): Max gradient norm for the policy and value networks
+            (clipped separately), so one unusually large batch can't cause a single
+            destructively large update.
+
+        normalize_obs (bool): Maintain a running mean/std over observations and feed the
+            network normalized obs instead of raw ones (see RunningMeanStd) - raw obs mix
+            very different natural scales (torso height, joint angles, velocities), which
+            a freshly initialized network has no principled way to weigh comparably.
+
+        resume_from (str): Path to a model.pt checkpoint (from a previous
+            EpochLogger.save_state()) to resume from - loads the actor-critic's weights
+            and, if normalize_obs is True and the checkpoint has one, the observation
+            normalizer's running stats, before training starts. ac_kwargs must produce
+            the same architecture the checkpoint was saved from (load_state_dict fails
+            on a shape mismatch). Optimizer state isn't saved/restored, so Adam's moment
+            estimates restart from scratch - that typically settles within a handful of
+            updates and isn't worth the extra checkpoint complexity. None (default)
+            starts training from a fresh, randomly initialized policy.
+
     """
-
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-
-    # Special function to avoid certain slowdowns from PyTorch + MPI combo.
-    setup_pytorch_for_mpi()
 
     # Set up logger and save configuration
     logger = EpochLogger(**logger_kwargs)
     logger.save_config(locals())
 
-    # Random seed
-    seed += 10000 * proc_id()
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    # Instantiate environment
-    env = env_fn()
+    # num_envs copies of the environment run in parallel subprocesses (one browser tab
+    # each), all pointing at the same shared static-asset game server. TimeLimit enforces
+    # max_ep_len as a standard gymnasium truncation, so the vector env's own autoreset
+    # machinery handles it uniformly instead of needing custom bookkeeping in this loop.
+    def make_env():
+        return TimeLimit(env_fn(), max_episode_steps=max_ep_len)
 
-    obs_dim = env.observation_space.shape
-    act_dim = env.action_space.shape[0]
+    if num_envs > 1:
+        envs = AsyncVectorEnv([make_env] * num_envs, context="fork", autoreset_mode=AutoresetMode.SAME_STEP)
+    else:
+        envs = SyncVectorEnv([make_env], autoreset_mode=AutoresetMode.SAME_STEP)
 
-    # Create actor-critic module
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    try:
+        obs_dim = envs.single_observation_space.shape
+        # .shape rather than .shape[0]: works generically for both Box/MultiBinary action
+        # spaces ((n,)) and Discrete ((), a scalar action index per timestep - the buffer
+        # ends up storing plain ints rather than per-key vectors).
+        act_dim = envs.single_action_space.shape
 
-    # Sync params across processes
-    sync_params(ac)
+        # Create the actor-critic module - a single instance. There's only ever one
+        # policy: no per-process copies, no weight broadcasting, since every env's
+        # experience already lands in this one process.
+        ac = actor_critic(envs.single_observation_space, envs.single_action_space, **ac_kwargs)
 
-    # Count variables
-    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
-    logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n' % var_counts)
+        # Count variables
+        var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
+        logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n' % var_counts)
 
-    # Set up experience buffer
-    local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+        # One experience buffer per env, each holding that env's local share of the
+        # epoch's total step budget.
+        local_steps_per_epoch = int(steps_per_epoch / num_envs)
+        bufs = [PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam) for _ in range(num_envs)]
 
-    # Set up optimizers for policy and value function
-    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-    vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+        # Raw obs mix very different natural scales (torso height, joint angles,
+        # velocities) - see RunningMeanStd. update_and_normalize is for the per-step
+        # batches (updates the running stats with this batch, then normalizes it);
+        # normalize_only is for one-off single observations pulled from info['final_obs']
+        # (the real terminal obs on a step where an env auto-reset), which shouldn't also
+        # be folded into the running stats a second time alongside the batch it came from.
+        obs_rms = RunningMeanStd(shape=obs_dim) if normalize_obs else None
 
-    # Set up model saving
-    logger.setup_pytorch_saver(ac)
+        def update_and_normalize(x):
+            if obs_rms is None:
+                return np.asarray(x, dtype=np.float32)
+            obs_rms.update(x)
+            return obs_rms.normalize(x).astype(np.float32)
 
-    # Prepare for interaction with environment
-    start_time = time.time()
-    reset_result = env.reset()
-    o = reset_result if isinstance(reset_result, np.ndarray) else reset_result[0]
-    ep_ret, ep_len = 0, 0
-    ep_max_posx, ep_sum_posx = 0, 0
+        def normalize_only(x):
+            if obs_rms is None:
+                return np.asarray(x, dtype=np.float32)
+            return obs_rms.normalize(x).astype(np.float32)
 
-    # Main loop: collect experience in env and update/log each epoch
-    for epoch in range(epochs):
-        with torch.no_grad():
-            for t in range(local_steps_per_epoch):
-                a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
+        if resume_from is not None:
+            checkpoint = torch.load(resume_from, map_location='cpu', weights_only=False)
+            ac.load_state_dict(checkpoint['model_state_dict'])
+            if obs_rms is not None and 'obs_rms' in checkpoint:
+                obs_rms.mean = checkpoint['obs_rms']['mean']
+                obs_rms.var = checkpoint['obs_rms']['var']
+                obs_rms.count = checkpoint['obs_rms']['count']
+            logger.log(f'Resumed from checkpoint: {resume_from}')
 
-                a = a.squeeze()
-                v = float(v.squeeze())
-                logp = float(logp.squeeze())
+        # Set up optimizers for policy and value function
+        pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
+        vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
 
-                next_o, r, terminated, truncated, info = env.step(a)
-                d = terminated or truncated
-                ep_ret += r
-                ep_len += 1
+        # Set up model saving
+        logger.setup_pytorch_saver(ac)
 
-                # Track position for logging
-                state = info.get('state', {})
-                posx = state.get('posx', 0)
-                ep_max_posx = max(ep_max_posx, posx)
-                ep_sum_posx += posx
+        # Prepare for interaction with environment
+        start_time = time.time()
+        obs, _ = envs.reset(seed=seed)
+        obs = update_and_normalize(obs)
+        ep_ret = np.zeros(num_envs)
+        ep_len = np.zeros(num_envs, dtype=int)
+        ep_max_posx = np.zeros(num_envs)
+        ep_sum_posx = np.zeros(num_envs)
+        ep_sum_velx = np.zeros(num_envs)
+        current_posx = np.zeros(num_envs)
 
-                # save and log
-                buf.store(o, a, r, v, logp)
-                logger.store(VVals=v)
+        # Main loop: collect experience in the envs and update/log each epoch
+        for epoch in range(epochs):
+            with torch.no_grad():
+                for t in range(local_steps_per_epoch):
+                    a, v, logp = ac.step(torch.as_tensor(obs, dtype=torch.float32))
 
-                # Only render from process 0 to avoid interleaved output in multi-CPU
-                if rank == 0 and hasattr(env, 'render'):
-                    try:
-                        # Show rank only in multi-CPU mode
-                        render_rank = rank if num_procs() > 1 else None
-                        env.unwrapped.render(rank=render_rank)
-                    except TypeError:
-                        try:
-                            env.render()
-                        except Exception:
-                            pass
+                    next_obs, rewards, terminateds, truncateds, infos = envs.step(a)
+                    next_obs = update_and_normalize(next_obs)
+                    epoch_ended = t == local_steps_per_epoch - 1
 
-                # Update obs (critical!)
-                o = next_o
+                    for i in range(num_envs):
+                        done = bool(terminateds[i]) or bool(truncateds[i])
 
-                timeout = ep_len == max_ep_len
-                terminal = d or timeout
-                epoch_ended = t == local_steps_per_epoch-1
+                        ep_ret[i] += rewards[i]
+                        ep_len[i] += 1
 
-                time.sleep(0.05)
+                        posx = _vector_scalar(infos, "posx", i, done)
+                        ep_max_posx[i] = max(ep_max_posx[i], posx)
+                        ep_sum_posx[i] += posx
+                        ep_sum_velx[i] += _vector_scalar(infos, "velx", i, done)
+                        # Cumulative within the episode already (see QWOPEnv.step) - just
+                        # read the current value, don't sum/max it across steps.
+                        stride_count = _vector_scalar(infos, "stride_count", i, done)
+                        current_posx[i] = 0.0 if done else posx
 
-                if terminal or epoch_ended:
-                    if epoch_ended and not(terminal):
-                        print('Warning: trajectory cut off by epoch at %d steps.' %
-                            ep_len, flush=True)
-                    # if trajectory didn't reach terminal state, bootstrap value target
-                    if timeout or epoch_ended:
-                        _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
-                        v = float(v.squeeze())
-                    else:
-                        v = 0
-                    buf.finish_path(v)
-                    # Log episode stats (both terminal and epoch-ended episodes)
-                    if ep_len > 0:
-                        logger.store(EpRet=ep_ret, EpLen=ep_len)
-                        logger.store(EpMaxPosx=ep_max_posx, EpAvgPosx=ep_sum_posx/ep_len)
-                    reset_result = env.reset()
-                    o = reset_result if isinstance(reset_result, np.ndarray) else reset_result[0]
-                    ep_ret, ep_len = 0, 0
-                    ep_max_posx, ep_sum_posx = 0, 0
+                        bufs[i].store(obs[i], a[i], rewards[i], v[i], logp[i])
+                        logger.store(VVals=v[i])
 
-        # Save model
-        if (epoch % save_freq == 0) or (epoch == epochs-1):
-            logger.save_state({'env': env}, None)
+                        if done or epoch_ended:
+                            if epoch_ended and not done:
+                                print('Warning: trajectory cut off by epoch at %d steps.' %
+                                    ep_len[i], flush=True)
+                            # Bootstrap the value target unless the episode reached a true
+                            # terminal state (fell over) - nothing beyond that to bootstrap.
+                            if done and terminateds[i]:
+                                v_boot = 0.0
+                            else:
+                                if done:
+                                    # Real terminal obs from info['final_obs'] hasn't been
+                                    # through update_and_normalize yet (next_obs[i] here is
+                                    # the post-autoreset obs, not this) - normalize it the
+                                    # same way, just without double-counting it into the
+                                    # running stats already updated for this batch.
+                                    last_obs = normalize_only(_vector_final_obs(infos, i))
+                                else:
+                                    last_obs = next_obs[i]
+                                _, v_boot, _ = ac.step(torch.as_tensor(last_obs, dtype=torch.float32).unsqueeze(0))
+                                v_boot = float(v_boot.squeeze())
+                            bufs[i].finish_path(v_boot)
+                            if ep_len[i] > 0:
+                                logger.store(EpRet=ep_ret[i], EpLen=ep_len[i])
+                                logger.store(EpMaxPosx=ep_max_posx[i], EpAvgPosx=ep_sum_posx[i] / ep_len[i])
+                                logger.store(EpAvgVelx=ep_sum_velx[i] / ep_len[i])
+                                logger.store(EpStrideCount=stride_count)
+                            ep_ret[i], ep_len[i] = 0, 0
+                            ep_max_posx[i], ep_sum_posx[i], ep_sum_velx[i] = 0, 0, 0
 
-        data = buf.mpi_gather()
+                    # Live progress line: current position per env, overwritten in place
+                    # (\r, no newline) so it doesn't spam the terminal. Uses the posx
+                    # already extracted above rather than calling .render() on the actual
+                    # env objects, which only works for num_envs=1 (SyncVectorEnv) -
+                    # AsyncVectorEnv's sub-envs live in other processes and aren't directly
+                    # callable here, but this way progress is visible either way.
+                    pos_str = "  ".join(f"env{i}: {current_posx[i]:6.2f}" for i in range(num_envs))
+                    print(f"\rEpoch {epoch}  Step {t + 1}/{local_steps_per_epoch}  {pos_str}", end="", flush=True)
 
-        if rank == 0: #Root process performs ppo update
-            ac = run_update(ac, data, pi_optimizer, vf_optimizer, train_v_iters, clip_ratio, target_kl, logger, 1024)
-            param = next(iter(ac.v.parameters()))
-            
-        sync_params(ac)
+                    obs = next_obs
 
-        # Log info about epoch
-        logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
-        logger.log_tabular('EpLen', average_only=True)
-        logger.log_tabular('EpMaxPosx', with_min_and_max=True)
-        logger.log_tabular('EpAvgPosx', with_min_and_max=True)
-        logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        # logger.log_tabular('LossPi', average_only=True)
-        # logger.log_tabular('LossV', average_only=True)
-        # logger.log_tabular('DeltaLossPi', average_only=True)
-        # logger.log_tabular('DeltaLossV', average_only=True)
-        # logger.log_tabular('Entropy', average_only=True)
-        # logger.log_tabular('KL', average_only=True)
-        # logger.log_tabular('ClipFrac', average_only=True)
-        # logger.log_tabular('StopIter', average_only=True)
-        logger.log_tabular('Time', time.time()-start_time)
-        logger.dump_tabular()
+            print()  # end the \r-overwritten progress line before the epoch summary below
+
+            # Save model
+            if (epoch % save_freq == 0) or (epoch == epochs - 1):
+                logger.save_state(obs_rms)
+
+            data = combine_buffers(bufs)
+            data = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
+            ac = run_update(ac, data, pi_optimizer, vf_optimizer, train_pi_iters, train_v_iters,
+                             clip_ratio, target_kl, logger, 1024, ent_coef, max_grad_norm)
+
+            # Every epoch starts fresh for every env, even mid-episode - matches the
+            # original single-env loop, which reset unconditionally on epoch_ended too.
+            obs, _ = envs.reset()
+            obs = update_and_normalize(obs)
+            ep_ret[:] = 0
+            ep_len[:] = 0
+            ep_max_posx[:] = 0
+            ep_sum_posx[:] = 0
+            ep_sum_velx[:] = 0
+
+            # Log info about epoch
+            logger.log_tabular('Epoch', epoch)
+            logger.log_tabular('EpRet', with_min_and_max=True)
+            logger.log_tabular('EpLen', average_only=True)
+            logger.log_tabular('EpMaxPosx', with_min_and_max=True)
+            logger.log_tabular('EpAvgPosx', with_min_and_max=True)
+            logger.log_tabular('EpAvgVelx', with_min_and_max=True)
+            logger.log_tabular('EpStrideCount', with_min_and_max=True)
+            logger.log_tabular('VVals', with_min_and_max=True)
+            logger.log_tabular('TotalEnvInteracts', (epoch + 1) * steps_per_epoch)
+            logger.log_tabular('Time', time.time() - start_time)
+            logger.dump_tabular()
+    finally:
+        envs.close()
+        logger.close()

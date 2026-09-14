@@ -1,4 +1,5 @@
 """WebSocket-based QWOP environment (10-20x faster than Selenium)."""
+import atexit
 import json
 import time
 import logging
@@ -8,7 +9,6 @@ import websocket
 import threading
 
 from .base import BaseQWOPEnv
-from .server import GameServerManager
 
 logger = logging.getLogger(__name__)
 
@@ -17,62 +17,62 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
     """
     QWOP environment using WebSocket for direct communication with game.
 
-    This is 10-20x faster than Selenium because it eliminates:
-    - WebDriver protocol overhead (100-200ms per call)
-    - DOM querying and parsing
-    - Browser automation latency
+    This is 10-20x faster than Selenium-driven stepping because per-step interaction
+    (actions in, state out) goes over a WebSocket instead of the WebDriver protocol.
+    A browser tab is still launched once at startup (see `BaseQWOPEnv._launch_browser`)
+    to actually run the game's JS/Box2D physics - headless unless render_mode="human".
 
-    Instead, it communicates directly with the game via WebSocket messages.
+    server.js relays messages between this client and the browser tab running the game
+    (see game/public/ws.js), so both must be connected to the same server instance.
     """
 
     def __init__(
         self,
-        url: str = "ws://localhost:3000/api/env",
-        headless: bool = True,
+        render_mode=None,
+        render_fps=60,
+        url: Optional[str] = None,
         timeout: int = 10,
         auto_start_server: bool = True,
         server_path: Optional[str] = None,
-        server_port: int = 3000,
+        server_port: Optional[int] = None,
+        launch_browser: bool = False,
     ):
         """
         Initialize WebSocket QWOP environment.
 
         Args:
-            url: WebSocket URL to game server
-            headless: Run browser in headless mode (for Selenium fallback)
-            timeout: Connection timeout
+            url: WebSocket URL to game server (derived from server_port if not given)
+            timeout: Connection/startup timeout in seconds
             auto_start_server: Automatically start game server
             server_path: Path to game server
-            server_port: Port for game server
+            server_port: Port for game server (falls back to QWOP_SERVER_PORT env var,
+                then 3000). Each parallel instance needs its own port.
+            launch_browser: Automatically launch a browser tab to run the game. The tab
+                is visible with render_mode="human", headless otherwise.
         """
-        super().__init__()
+        super().__init__(render_mode, render_fps)
 
-        self.url = url
+        if server_port is None:
+            server_port = self._resolve_server_port(3100)
+
+        self.server_port = server_port
+        self.http_url = f"http://localhost:{server_port}"
+        self.url = url or f"ws://localhost:{server_port}"
         self.timeout = timeout
-        self.server_manager = None
+        self.headless = self.render_mode not in ("human", "realtime")
         self.ws = None
         self.ws_thread = None
+        self.last_state = None
 
-        # Auto-start game server
-        if auto_start_server:
-            try:
-                self.server_manager = GameServerManager(
-                    server_path=server_path,
-                    port=server_port,
-                    auto_start=True,
-                    timeout=timeout,
-                )
-            except RuntimeError as e:
-                logger.warning(f"Could not start game server: {e}")
+        self.server_manager = self._start_game_server(server_path, server_port, timeout) if auto_start_server else None
 
         # Connect to WebSocket
         self._connect_websocket()
 
-        # For velocity tracking
-        self.last_joint_angles = {}
-        self.joint_names = ["head", "torso", "leftarm", "rightarm", "leftthigh", "rightthigh", "leftcalf", "rightcalf"]
-        self.max_fps = 60
-        self.last_frame_time = time.time()
+        if launch_browser:
+            self.driver = self._launch_browser(f"{self.http_url}/?webgl=true", self.headless)
+
+        atexit.register(self.close)
 
     def _connect_websocket(self):
         """Connect to game server via WebSocket."""
@@ -96,7 +96,6 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
                 raise RuntimeError("WebSocket connection failed")
 
             logger.info("WebSocket connected successfully")
-            self.last_state = None
 
         except Exception as e:
             logger.error(f"Failed to connect WebSocket: {e}")
@@ -131,33 +130,47 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
         }
 
     def compute_reward(self, state: Dict[str, float] = None) -> float:
-        """Reward is computed by server and returned in response."""
+        """Reward is computed by the browser client and returned in the response."""
         state = state or self.get_state()
         return float(state.get("reward", 0.0))
 
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    def _request(self, message: Dict[str, Any], timeout: float, retry: bool = False) -> Dict[str, Any]:
+        """Send a message and wait for the matching state response.
+
+        With `retry`, keeps retrying (e.g. while the game browser is still starting up)
+        until `timeout` seconds have elapsed rather than failing on the first attempt.
+        """
+        deadline = time.time() + timeout
+
+        while True:
+            self.last_state = None
+            try:
+                self.ws.send(json.dumps(message))
+            except Exception as e:
+                raise RuntimeError(f"Failed to send message to game server: {e}")
+
+            wait_until = time.time() + (0.5 if retry else 0.1)
+            while self.last_state is None and time.time() < wait_until:
+                time.sleep(0.001)
+
+            if self.last_state is not None and "error" not in self.last_state:
+                return self.last_state
+
+            if not retry or time.time() >= deadline:
+                reason = self.last_state.get("error") if self.last_state else "no response"
+                raise RuntimeError(f"Game server did not return a valid state ({reason})")
+
+            time.sleep(0.2)
+
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute one environment step via WebSocket."""
         self._throttle()
 
-        # Send action to game
-        message = {"action": action.tolist()}
-        try:
-            self.ws.send(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Failed to send action: {e}")
-            raise
-
-        # Wait for response (should arrive within 16ms at 60 FPS)
-        timeout = time.time() + 0.1
-        while self.last_state is None and time.time() < timeout:
-            time.sleep(0.001)  # Small sleep to avoid busy-wait
-
-        if self.last_state is None:
-            logger.error("No response from game server")
-            raise RuntimeError("Game server not responding")
-
-        state = self.last_state
-        self.last_state = None
+        # Decode the Discrete(16) action index into the [q, w, o, p] array the browser's
+        # actionToKeys() expects (see QWOPEnv._decode_action for why the action space is
+        # one Categorical over key combinations rather than 4 independent Bernoullis).
+        key_states = [(int(action) >> i) & 1 for i in range(4)]
+        state = self._request({"type": "step", "action": key_states}, timeout=0.5)
 
         obs = self.obs(state)
         reward = state.get("reward", 0.0)
@@ -168,42 +181,17 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
 
     def reset(self, seed=None, options=None) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset game to initial state."""
-        try:
-            message = {"action": "reset"}
-            self.ws.send(json.dumps(message))
+        # Long timeout + retry: the game browser may still be loading on the very first reset.
+        state = self._request({"type": "reset"}, timeout=15.0, retry=True)
 
-            # Wait for reset response
-            timeout = time.time() + 1.0
-            while self.last_state is None and time.time() < timeout:
-                time.sleep(0.01)
-
-            if self.last_state is None:
-                raise RuntimeError("Reset response timeout")
-
-            state = self.last_state
-            self.last_state = None
-
-            self.last_frame_time = time.time()
-            self.last_joint_angles = {}
-
-            return self.obs(state), {}
-
-        except Exception as e:
-            logger.error(f"Error during reset: {e}")
-            raise RuntimeError(f"Failed to reset game: {e}")
-
-    def _throttle(self):
-        """Maintain frame rate."""
-        current_time = time.time()
-        delta = current_time - self.last_frame_time
-        min_delta = 1.0 / self.max_fps
-        if delta < min_delta:
-            time.sleep(min_delta - delta)
         self.last_frame_time = time.time()
 
-    def render(self, mode='human', rank=None):
-        """Print human-readable state."""
-        state = self.get_state()
+        return self.obs(state), {}
+
+    def render(self, mode='human', rank=None, state=None):
+        """Print human-readable state. Pass `state` (e.g. the info['state'] a just-completed
+        step() already returned) to avoid an extra round trip re-fetching it."""
+        state = state if state is not None else self.get_state()
         rank_str = f"[Agent {rank}] " if rank is not None else ""
         print(
             f"\r{rank_str}[QWOP-WS] Pos: {state.get('posx', 0):6.2f}  "
@@ -224,10 +212,4 @@ class WebSocketQWOPEnv(BaseQWOPEnv):
             finally:
                 self.ws = None
 
-        if self.server_manager:
-            try:
-                self.server_manager.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping server: {e}")
-            finally:
-                self.server_manager = None
+        super().close()

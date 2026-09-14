@@ -179,6 +179,14 @@ class GameServerManager:
             if self.process:
                 exit_code = self.process.poll()
                 if exit_code is not None:
+                    # Multiple parallel workers may race to start a server on the same
+                    # port; if ours lost that race (e.g. EADDRINUSE) but the port is now
+                    # serving anyway, that's fine - just use the one that won.
+                    if self.is_server_ready():
+                        logger.info(f"Another process already started the game server at {self.url}; using it")
+                        self.process = None
+                        return True
+
                     stdout, stderr = self.process.communicate()
                     logger.error(f"Server process crashed (exit code {exit_code})")
                     logger.error(f"  stdout: {stdout[:200] if stdout else '(empty)'}")
